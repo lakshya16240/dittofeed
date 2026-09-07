@@ -862,6 +862,9 @@ export default function TemplatesTable({
             >
               Mobile Push
             </ToggleButton>
+            <ToggleButton value={ChannelType.WhatsApp} aria-label="WhatsApp">
+              WhatsApp
+            </ToggleButton>
           </ToggleButtonGroup>
           {selectedChannel === ChannelType.Email &&
             (() => {

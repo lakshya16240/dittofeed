@@ -432,6 +432,11 @@ export function NewAnalysisFilterButton({
                       type: AnalysisFilterCommandType.SelectItem,
                       id: ChannelType.Webhook,
                     },
+                    {
+                      label: "WhatsApp",
+                      type: AnalysisFilterCommandType.SelectItem,
+                      id: ChannelType.WhatsApp,
+                    },
                   ];
                   // Filter channels based on allowedChannels configuration
                   const children = allowedChannels

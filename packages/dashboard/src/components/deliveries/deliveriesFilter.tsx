@@ -393,6 +393,16 @@ export function NewDeliveriesFilterButton({
                       id: ChannelType.Webhook,
                       type: DeliveriesFilterCommandType.SelectItem,
                     },
+                    {
+                      label: "Mobile Push",
+                      id: ChannelType.MobilePush,
+                      type: DeliveriesFilterCommandType.SelectItem,
+                    },
+                    {
+                      label: "WhatsApp",
+                      id: ChannelType.WhatsApp,
+                      type: DeliveriesFilterCommandType.SelectItem,
+                    },
                   ];
 
                   draft.stage = {
