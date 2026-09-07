@@ -199,6 +199,17 @@ export default function MessagesPage() {
               return [];
             }
 
+            const { channelStats } = nodeStats;
+
+            // A WhatsApp read receipt is the analogue of an email open, so it
+            // fills the same column instead of adding a near-duplicate one.
+            let openRate = 0;
+            if (channelStats?.type === ChannelType.Email) {
+              openRate = channelStats.openRate;
+            } else if (channelStats?.type === ChannelType.WhatsApp) {
+              openRate = channelStats.readRate;
+            }
+
             const row: MessageRow = {
               id: `${journey.id}-${node.id}`,
               journeyName: journey.name,
@@ -207,23 +218,21 @@ export default function MessagesPage() {
               messageChannel: message.definition.type,
               messageName: message.name,
               sendRate: nodeStats.sendRate,
+              // Matched structurally rather than by channel so a channel that
+              // reports the rate is never silently shown as zero.
               clickRate:
-                nodeStats.channelStats?.type === ChannelType.Email
-                  ? nodeStats.channelStats.clickRate
+                channelStats && "clickRate" in channelStats
+                  ? channelStats.clickRate
                   : 0,
               deliveryRate:
-                nodeStats.channelStats &&
-                "deliveryRate" in nodeStats.channelStats
-                  ? nodeStats.channelStats.deliveryRate
+                channelStats && "deliveryRate" in channelStats
+                  ? channelStats.deliveryRate
                   : 0,
               spamRate:
-                nodeStats.channelStats?.type === ChannelType.Email
-                  ? nodeStats.channelStats.spamRate
+                channelStats?.type === ChannelType.Email
+                  ? channelStats.spamRate
                   : 0,
-              openRate:
-                nodeStats.channelStats?.type === ChannelType.Email
-                  ? nodeStats.channelStats.openRate
-                  : 0,
+              openRate,
             };
             return row;
           });

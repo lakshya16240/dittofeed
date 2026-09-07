@@ -97,6 +97,10 @@ export enum InternalEventType {
   EmailMarkedSpam = "DFEmailMarkedSpam",
   SmsDelivered = "DFSmsDelivered",
   SmsFailed = "DFSmsFailed",
+  WhatsAppDelivered = "DFWhatsAppDelivered",
+  WhatsAppRead = "DFWhatsAppRead",
+  WhatsAppFailed = "DFWhatsAppFailed",
+  WhatsAppClicked = "DFWhatsAppClicked",
   JourneyNodeProcessed = "DFJourneyNodeProcessed",
   ManualSegmentUpdate = "DFManualSegmentUpdate",
   AttachedFiles = "DFAttachedFiles",
@@ -115,6 +119,43 @@ export const StatusEventsList = [
   InternalEventType.EmailMarkedSpam,
   InternalEventType.SmsDelivered,
   InternalEventType.SmsFailed,
+  InternalEventType.WhatsAppDelivered,
+  InternalEventType.WhatsAppRead,
+  InternalEventType.WhatsAppFailed,
+  InternalEventType.WhatsAppClicked,
+] as const;
+
+// Status events grouped by the outcome they represent.
+//
+// The aggregation queries used to hard-code these event names inline, once in
+// getSummarizedData and again in getJourneyEditorStats. That duplication is
+// why MobilePush was counted in one place and not the other: adding an event
+// to StatusEventsList makes it ingest and show in the deliveries table, but a
+// query that does not name it still reports zero. Extending these lists wires
+// a channel into every aggregation at once.
+
+export const DeliveredEventsList = [
+  InternalEventType.EmailDelivered,
+  InternalEventType.SmsDelivered,
+  InternalEventType.WhatsAppDelivered,
+] as const;
+
+// A WhatsApp read receipt is the direct analogue of an email open, so it
+// counts toward the same "opened" outcome rather than a near-duplicate one.
+export const OpenedEventsList = [
+  InternalEventType.EmailOpened,
+  InternalEventType.WhatsAppRead,
+] as const;
+
+export const ClickedEventsList = [
+  InternalEventType.EmailClicked,
+  InternalEventType.WhatsAppClicked,
+] as const;
+
+export const BouncedEventsList = [
+  InternalEventType.EmailBounced,
+  InternalEventType.SmsFailed,
+  InternalEventType.WhatsAppFailed,
 ] as const;
 
 export enum CursorDirectionEnum {
@@ -4013,10 +4054,23 @@ export const WebhookStats = Type.Object({
 
 export type WebhookStats = Static<typeof WebhookStats>;
 
+export const WhatsAppStats = Type.Object({
+  type: Type.Literal(ChannelType.WhatsApp),
+  deliveryRate: Type.Number(),
+  // Read receipts depend on the provider forwarding them, so this can stay at
+  // zero while deliveryRate is healthy.
+  readRate: Type.Number(),
+  clickRate: Type.Number(),
+  failRate: Type.Optional(Type.Number()),
+});
+
+export type WhatsAppStats = Static<typeof WhatsAppStats>;
+
 export const MessageChannelStats = Type.Union([
   EmailStats,
   SmsStats,
   WebhookStats,
+  WhatsAppStats,
 ]);
 
 export type MessageChannelStats = Static<typeof MessageChannelStats>;

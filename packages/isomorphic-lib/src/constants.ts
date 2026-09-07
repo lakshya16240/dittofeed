@@ -8,6 +8,7 @@ import {
   SegmentNodeType,
   SegmentOperatorType,
   SmsProviderType,
+  StatusEventsList,
   WorkspaceWideEmailProviders,
 } from "./types";
 
@@ -76,19 +77,19 @@ export const ENTRY_TYPES = new Set<string>([
   JourneyNodeType.EventEntryNode,
 ]);
 
+// The send lifecycle plus every per-channel status event.
+//
+// getJourneyMessageStats filters the internal_events scan on this list, so an
+// event missing here never reaches the per-node stats no matter how many
+// aggregations know how to count it. Spreading StatusEventsList rather than
+// restating it keeps the two from drifting apart -- the enumerated form had
+// already lost track of the channels added after email and SMS.
 export const MESSAGE_EVENTS = [
   InternalEventType.MessageSent,
   InternalEventType.MessageFailure,
   InternalEventType.MessageSkipped,
   InternalEventType.BadWorkspaceConfiguration,
-  InternalEventType.EmailDelivered,
-  InternalEventType.EmailOpened,
-  InternalEventType.EmailClicked,
-  InternalEventType.EmailDropped,
-  InternalEventType.EmailBounced,
-  InternalEventType.EmailMarkedSpam,
-  InternalEventType.SmsDelivered,
-  InternalEventType.SmsFailed,
+  ...StatusEventsList,
 ];
 
 export enum SourceType {

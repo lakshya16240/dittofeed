@@ -17,6 +17,7 @@ import {
   InternalEventType,
   MessageSendSuccess,
   SmsProviderType,
+  WhatsAppProviderType,
 } from "./types";
 import { createWorkspace } from "./workspaces";
 
@@ -1546,6 +1547,126 @@ describe("analysis", () => {
       expect(result.summary.opens).toBe(0); // SMS doesn't have opens
       expect(result.summary.clicks).toBe(0); // SMS doesn't have clicks
       expect(result.summary.bounces).toBe(1); // 1 SMS failed (treated as bounce)
+    });
+  });
+
+  describe("getSummarizedData with WhatsApp channel", () => {
+    let journeyId: string;
+    let templateId: string;
+
+    // One message per terminal status, so the cascade can be checked
+    // independently of how many statuses a single message accumulated.
+    beforeEach(async () => {
+      journeyId = randomUUID();
+      templateId = randomUUID();
+
+      const messageSentEvent: Omit<MessageSendSuccess, "type"> = {
+        variant: {
+          type: ChannelType.WhatsApp,
+          to: "+919876543210",
+          provider: { type: WhatsAppProviderType.Interakt },
+          templateName: "abandon_cart2",
+          languageCode: "en",
+          bodyValues: ["Lakshya", "Crocin 650"],
+        },
+      };
+
+      const now = Date.now();
+      const sentIds = {
+        delivered: randomUUID(),
+        read: randomUUID(),
+        clicked: randomUUID(),
+        failed: randomUUID(),
+      };
+
+      const sent = (messageId: string, offsetMs: number): BatchItem => ({
+        userId: randomUUID(),
+        timestamp: new Date(now - offsetMs).toISOString(),
+        type: EventType.Track,
+        messageId,
+        event: InternalEventType.MessageSent,
+        properties: {
+          workspaceId,
+          journeyId,
+          nodeId: randomUUID(),
+          runId: randomUUID(),
+          templateId,
+          messageId,
+          ...messageSentEvent,
+        },
+      });
+
+      const status = (
+        originMessageId: string,
+        event: InternalEventType,
+        offsetMs: number,
+      ): BatchItem => ({
+        userId: randomUUID(),
+        timestamp: new Date(now - offsetMs).toISOString(),
+        type: EventType.Track,
+        messageId: randomUUID(),
+        event,
+        properties: {
+          workspaceId,
+          journeyId,
+          nodeId: randomUUID(),
+          runId: randomUUID(),
+          templateId,
+          // Links the status back to the send it belongs to.
+          messageId: originMessageId,
+        },
+      });
+
+      const events: BatchItem[] = [
+        sent(sentIds.delivered, 3600000),
+        sent(sentIds.read, 3500000),
+        sent(sentIds.clicked, 3400000),
+        sent(sentIds.failed, 3300000),
+        status(sentIds.delivered, InternalEventType.WhatsAppDelivered, 3590000),
+        status(sentIds.read, InternalEventType.WhatsAppRead, 3490000),
+        status(sentIds.clicked, InternalEventType.WhatsAppClicked, 3390000),
+        status(sentIds.failed, InternalEventType.WhatsAppFailed, 3290000),
+      ];
+
+      for (const event of events) {
+        await submitBatch(
+          { workspaceId, data: { batch: [event] } },
+          { processingTime: now - 3600000 },
+        );
+      }
+    });
+
+    it("returns WhatsApp metrics with reads and clicks cascading", async () => {
+      const result = await getSummarizedData({
+        workspaceId,
+        startDate: new Date(Date.now() - 7200000).toISOString(),
+        endDate: new Date().toISOString(),
+        filters: { channel: ChannelType.WhatsApp },
+      });
+
+      expect(result.summary.sent).toBe(4);
+      // A read or a click proves delivery, so all three non-failed messages
+      // count as delivered even though only one emitted a delivered event.
+      expect(result.summary.deliveries).toBe(3);
+      // A read receipt is the open analogue, and a click implies a read.
+      expect(result.summary.opens).toBe(2);
+      expect(result.summary.clicks).toBe(1);
+      expect(result.summary.bounces).toBe(1);
+    });
+
+    it("does not attribute WhatsApp statuses to another channel", async () => {
+      // Guards the shared event lists: if a WhatsApp status leaked into the
+      // SMS or email groupings, those channels would report deliveries for
+      // messages they never sent.
+      const sms = await getSummarizedData({
+        workspaceId,
+        startDate: new Date(Date.now() - 7200000).toISOString(),
+        endDate: new Date().toISOString(),
+        filters: { channel: ChannelType.Sms },
+      });
+
+      expect(sms.summary.sent).toBe(0);
+      expect(sms.summary.deliveries).toBe(0);
     });
   });
 

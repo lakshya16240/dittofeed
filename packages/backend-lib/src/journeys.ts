@@ -73,6 +73,7 @@ import {
   SegmentUpdate,
   SmsStats,
   UpsertJourneyResource,
+  WhatsAppStats,
   WorkspaceQueueItemType,
 } from "./types";
 
@@ -445,16 +446,38 @@ export async function getJourneyMessageStats({
           break;
         }
         case ChannelType.MobilePush: {
-          continue;
+          // FCM reports no delivery receipts, so sendRate is the only figure
+          // available. It still has to be reported: `continue` here dropped
+          // the node from the result entirely, which left a push node with no
+          // stats at all in the journey editor rather than with a send rate
+          // and empty delivery columns.
+          break;
         }
         case ChannelType.Webhook: {
           // TODO [DF-471]
           continue;
         }
         case ChannelType.WhatsApp: {
-          // No per-channel stats until the provider's delivery-receipt events
-          // are ingested; sendRate above is already correct for this node.
-          continue;
+          // Each message contributes only its terminal event (argMax above),
+          // so the buckets are disjoint and adding them reconstructs "reached
+          // at least this state" -- the same cascade the email case uses.
+          const clicked = nodeStats.get(InternalEventType.WhatsAppClicked) ?? 0;
+          const read =
+            (nodeStats.get(InternalEventType.WhatsAppRead) ?? 0) + clicked;
+          const delivered =
+            (nodeStats.get(InternalEventType.WhatsAppDelivered) ?? 0) + read;
+          const whatsAppFailures =
+            nodeStats.get(InternalEventType.WhatsAppFailed) ?? 0;
+
+          const whatsAppStats: WhatsAppStats = {
+            type: ChannelType.WhatsApp,
+            deliveryRate: delivered / total,
+            readRate: read / total,
+            clickRate: clicked / total,
+            failRate: whatsAppFailures / total,
+          };
+          channelStats = whatsAppStats;
+          break;
         }
         default:
           assertUnreachable(node.channel);
@@ -464,7 +487,9 @@ export async function getJourneyMessageStats({
         nodeId: node.id,
         stats: {
           sendRate,
-          channelStats,
+          // Omitted rather than null for channels that have no delivery
+          // receipts, since the field is optional on BaseMessageNodeStats.
+          ...(channelStats ? { channelStats } : {}),
         },
       });
     }

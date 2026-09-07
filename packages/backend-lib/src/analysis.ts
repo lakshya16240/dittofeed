@@ -1,18 +1,37 @@
 import {
+  BouncedEventsList,
   ChannelType,
   ChartDataPoint,
+  ClickedEventsList,
+  DeliveredEventsList,
   GetChartDataRequest,
   GetChartDataResponse,
   GetJourneyEditorStatsRequest,
   GetJourneyEditorStatsResponse,
   GetSummarizedDataRequest,
   GetSummarizedDataResponse,
+  OpenedEventsList,
   ResolvedChartGranularity,
 } from "isomorphic-lib/src/types";
 
 import { ClickHouseQueryBuilder, query as chQuery } from "./clickhouse";
 import logger from "./logger";
 import { InternalEventType } from "./types";
+
+// Renders an event-name list as a quoted SQL set. The values are members of
+// the InternalEventType enum, never user input, so they need no escaping --
+// filter values still go through ClickHouseQueryBuilder.
+function eventSet(events: readonly InternalEventType[]): string {
+  return events.map((event) => `'${event}'`).join(", ");
+}
+
+// The union of every outcome the aggregations below know how to count.
+const TRACKED_STATUS_EVENTS: readonly InternalEventType[] = [
+  ...DeliveredEventsList,
+  ...OpenedEventsList,
+  ...ClickedEventsList,
+  ...BouncedEventsList,
+];
 
 /**
  * Auto-select granularity based on time range width
@@ -477,10 +496,20 @@ export async function getSummarizedData({
           InternalEventType.SmsFailed,
         ];
         break;
+      case ChannelType.WhatsApp:
+        eventsToTrack = [
+          InternalEventType.MessageSent,
+          InternalEventType.WhatsAppDelivered,
+          InternalEventType.WhatsAppRead,
+          InternalEventType.WhatsAppClicked,
+          InternalEventType.WhatsAppFailed,
+        ];
+        break;
       case ChannelType.MobilePush:
       case ChannelType.Webhook:
       default:
-        // For other channels, only track sent messages for now
+        // FCM provides no delivery receipts and the webhook channel has no
+        // status events, so these stay sent-only.
         eventsToTrack = [InternalEventType.MessageSent];
         break;
     }
@@ -509,6 +538,16 @@ export async function getSummarizedData({
       sum(toUInt64(has_sent)) as sent,
       0 as opens,
       0 as clicks,
+      sum(toUInt64(has_bounced)) as bounces`;
+  } else if (channel === ChannelType.WhatsApp) {
+    // Same cascade as email: a read or a click proves delivery, and a click
+    // proves a read, so a provider that skips an intermediate status does not
+    // under-report the ones below it.
+    summaryFields = `
+      sum(toUInt64(has_delivered OR has_opened OR has_clicked)) as deliveries,
+      sum(toUInt64(has_sent)) as sent,
+      sum(toUInt64(has_opened OR has_clicked)) as opens,
+      sum(toUInt64(has_clicked)) as clicks,
       sum(toUInt64(has_bounced)) as bounces`;
   } else {
     // Other channels: only sent messages
@@ -540,24 +579,17 @@ export async function getSummarizedData({
       FROM internal_events AS ie
       WHERE
         ie.workspace_id = ${workspaceIdParam}
-        AND ie.event IN (
-          '${InternalEventType.EmailDelivered}',
-          '${InternalEventType.SmsDelivered}',
-          '${InternalEventType.EmailOpened}',
-          '${InternalEventType.EmailClicked}',
-          '${InternalEventType.EmailBounced}',
-          '${InternalEventType.SmsFailed}'
-        )
+        AND ie.event IN (${eventSet(TRACKED_STATUS_EVENTS)})
         AND ie.origin_message_id IN (SELECT origin_message_id FROM sent_messages)
     ),
     message_final_states AS (
       SELECT
         sm.origin_message_id,
         1 as has_sent,
-        max(se.event IN ('${InternalEventType.EmailDelivered}', '${InternalEventType.SmsDelivered}')) as has_delivered,
-        max(se.event = '${InternalEventType.EmailOpened}') as has_opened,
-        max(se.event = '${InternalEventType.EmailClicked}') as has_clicked,
-        max(se.event IN ('${InternalEventType.EmailBounced}', '${InternalEventType.SmsFailed}')) as has_bounced
+        max(se.event IN (${eventSet(DeliveredEventsList)})) as has_delivered,
+        max(se.event IN (${eventSet(OpenedEventsList)})) as has_opened,
+        max(se.event IN (${eventSet(ClickedEventsList)})) as has_clicked,
+        max(se.event IN (${eventSet(BouncedEventsList)})) as has_bounced
       FROM sent_messages sm
       LEFT JOIN status_events se USING (origin_message_id)
       GROUP BY sm.origin_message_id
@@ -665,12 +697,7 @@ export async function getJourneyEditorStats({
         AND journey_id = ${journeyIdParam}
         AND event IN (
           '${InternalEventType.MessageSent}',
-          '${InternalEventType.EmailDelivered}',
-          '${InternalEventType.SmsDelivered}',
-          '${InternalEventType.EmailOpened}',
-          '${InternalEventType.EmailClicked}',
-          '${InternalEventType.EmailBounced}',
-          '${InternalEventType.SmsFailed}'
+          ${eventSet(TRACKED_STATUS_EVENTS)}
         )
         AND JSON_VALUE(properties, '$.nodeId') != ''
         AND hidden = false
@@ -680,10 +707,10 @@ export async function getJourneyEditorStats({
         origin_message_id,
         node_id,
         countIf(event = '${InternalEventType.MessageSent}') > 0 as has_sent,
-        countIf(event IN ('${InternalEventType.EmailDelivered}', '${InternalEventType.SmsDelivered}')) > 0 as has_delivered,
-        countIf(event = '${InternalEventType.EmailOpened}') > 0 as has_opened,
-        countIf(event = '${InternalEventType.EmailClicked}') > 0 as has_clicked,
-        countIf(event IN ('${InternalEventType.EmailBounced}', '${InternalEventType.SmsFailed}')) > 0 as has_bounced
+        countIf(event IN (${eventSet(DeliveredEventsList)})) > 0 as has_delivered,
+        countIf(event IN (${eventSet(OpenedEventsList)})) > 0 as has_opened,
+        countIf(event IN (${eventSet(ClickedEventsList)})) > 0 as has_clicked,
+        countIf(event IN (${eventSet(BouncedEventsList)})) > 0 as has_bounced
       FROM message_events
       WHERE origin_message_id != '' AND node_id != ''
       GROUP BY origin_message_id, node_id
