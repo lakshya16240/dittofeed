@@ -32,8 +32,23 @@ export function expandCascadingMessageFilters(
         expandedStatuses.add(InternalEventType.EmailDelivered);
         break;
 
+      case InternalEventType.WhatsAppClicked:
+        // Same cascade as email. A click proves a read, and a read proves
+        // delivery, so filtering for delivered must not hide the messages
+        // that got further than that.
+        expandedStatuses.add(InternalEventType.WhatsAppClicked);
+        expandedStatuses.add(InternalEventType.WhatsAppRead);
+        expandedStatuses.add(InternalEventType.WhatsAppDelivered);
+        break;
+
+      case InternalEventType.WhatsAppRead:
+        expandedStatuses.add(InternalEventType.WhatsAppRead);
+        expandedStatuses.add(InternalEventType.WhatsAppDelivered);
+        break;
+
       case InternalEventType.EmailDelivered:
       case InternalEventType.SmsDelivered:
+      case InternalEventType.WhatsAppDelivered:
         // Delivery events remain as-is
         expandedStatuses.add(status);
         break;
@@ -43,6 +58,7 @@ export function expandCascadingMessageFilters(
       case InternalEventType.EmailMarkedSpam:
       case InternalEventType.EmailDropped:
       case InternalEventType.SmsFailed:
+      case InternalEventType.WhatsAppFailed:
         // These events don't cascade - they remain as selected
         expandedStatuses.add(status);
         break;

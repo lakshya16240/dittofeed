@@ -117,6 +117,16 @@ export function humanizeStatus(status: string) {
       return "Delivered";
     case InternalEventType.SmsFailed:
       return "Failed";
+    case InternalEventType.WhatsAppDelivered:
+      return "Delivered";
+    // "Read" rather than "Opened", matching what the recipient's own WhatsApp
+    // client calls it.
+    case InternalEventType.WhatsAppRead:
+      return "Read";
+    case InternalEventType.WhatsAppClicked:
+      return "Clicked";
+    case InternalEventType.WhatsAppFailed:
+      return "Failed";
     default:
       return status;
   }

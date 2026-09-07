@@ -348,6 +348,26 @@ export function NewDeliveriesFilterButton({
                       type: DeliveriesFilterCommandType.SelectItem,
                       id: InternalEventType.SmsFailed,
                     },
+                    {
+                      label: "WhatsApp Delivered",
+                      type: DeliveriesFilterCommandType.SelectItem,
+                      id: InternalEventType.WhatsAppDelivered,
+                    },
+                    {
+                      label: "WhatsApp Read",
+                      type: DeliveriesFilterCommandType.SelectItem,
+                      id: InternalEventType.WhatsAppRead,
+                    },
+                    {
+                      label: "WhatsApp Link Clicked",
+                      type: DeliveriesFilterCommandType.SelectItem,
+                      id: InternalEventType.WhatsAppClicked,
+                    },
+                    {
+                      label: "WhatsApp Failed",
+                      type: DeliveriesFilterCommandType.SelectItem,
+                      id: InternalEventType.WhatsAppFailed,
+                    },
                   ];
                   draft.stage = {
                     type: StageType.SelectItem,

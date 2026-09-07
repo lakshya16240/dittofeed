@@ -535,6 +535,26 @@ export function NewAnalysisFilterButton({
                       type: AnalysisFilterCommandType.SelectItem,
                       id: InternalEventType.SmsFailed,
                     },
+                    {
+                      label: "WhatsApp Delivered",
+                      type: AnalysisFilterCommandType.SelectItem,
+                      id: InternalEventType.WhatsAppDelivered,
+                    },
+                    {
+                      label: "WhatsApp Read",
+                      type: AnalysisFilterCommandType.SelectItem,
+                      id: InternalEventType.WhatsAppRead,
+                    },
+                    {
+                      label: "WhatsApp Link Clicked",
+                      type: AnalysisFilterCommandType.SelectItem,
+                      id: InternalEventType.WhatsAppClicked,
+                    },
+                    {
+                      label: "WhatsApp Failed",
+                      type: AnalysisFilterCommandType.SelectItem,
+                      id: InternalEventType.WhatsAppFailed,
+                    },
                   ];
                   draft.stage = {
                     type: StageType.SelectItem,
