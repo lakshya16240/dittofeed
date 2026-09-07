@@ -21,6 +21,7 @@ import {
   MessageSendSuccess,
   MessageSendSuccessVariant,
   SmsProviderType,
+  WhatsAppProviderType,
 } from "./types";
 import { createWorkspace } from "./workspaces";
 
@@ -974,6 +975,84 @@ describe("deliveries", () => {
           InternalEventType.EmailBounced,
           InternalEventType.EmailOpened,
         ]);
+      });
+    });
+
+    describe("with a WhatsApp message that the provider reports delivered", () => {
+      let sentMessageId: string;
+
+      beforeEach(async () => {
+        const userId = randomUUID();
+        const now = new Date();
+        sentMessageId = randomUUID();
+
+        const events: BatchItem[] = [
+          {
+            userId,
+            timestamp: now.toISOString(),
+            type: EventType.Track,
+            messageId: sentMessageId,
+            event: InternalEventType.MessageSent,
+            properties: {
+              workspaceId,
+              journeyId: randomUUID(),
+              nodeId: randomUUID(),
+              runId: randomUUID(),
+              templateId: randomUUID(),
+              messageId: sentMessageId,
+              variant: {
+                type: ChannelType.WhatsApp,
+                to: "+919876543210",
+                provider: { type: WhatsAppProviderType.Interakt },
+                templateName: "abandon_cart2",
+                languageCode: "en",
+                bodyValues: ["Lakshya", "Crocin 650"],
+              },
+            },
+          },
+          {
+            userId,
+            timestamp: new Date(now.getTime() + 10).toISOString(),
+            type: EventType.Track,
+            messageId: randomUUID(),
+            event: InternalEventType.WhatsAppDelivered,
+            // Exactly what the Interakt webhook forwarder can supply: the
+            // origin message id, and no journey context.
+            properties: {
+              workspaceId,
+              messageId: sentMessageId,
+              channel: ChannelType.WhatsApp,
+            },
+          },
+        ];
+
+        await submitBatch({ workspaceId, data: { batch: events } });
+      });
+
+      it("returns the row with its status advanced to delivered", async () => {
+        const deliveries = await searchDeliveries({ workspaceId });
+
+        // A missing member on the SearchDeliveriesResponseItem union makes
+        // parseSearchDeliveryRow return null, which drops the delivery
+        // silently while the send still succeeds -- so the row existing at
+        // all is the assertion that matters most here.
+        expect(deliveries.items).toHaveLength(1);
+
+        // The rendered contents have to survive the union too, since the
+        // delivery drill-down is what support reads to trace a send.
+        expect(deliveries.items[0]).toEqual(
+          expect.objectContaining({
+            status: InternalEventType.WhatsAppDelivered,
+            originMessageId: sentMessageId,
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+            variant: expect.objectContaining({
+              type: ChannelType.WhatsApp,
+              to: "+919876543210",
+              templateName: "abandon_cart2",
+              bodyValues: ["Lakshya", "Crocin 650"],
+            }),
+          }),
+        );
       });
     });
 
