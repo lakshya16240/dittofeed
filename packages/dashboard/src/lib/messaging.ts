@@ -11,9 +11,11 @@ import {
 import { toUserPropertyResource } from "backend-lib/src/userProperties";
 import { and, eq } from "drizzle-orm";
 import { defaultEmailDefinition } from "isomorphic-lib/src/email";
+import { defaultMobilePushDefinition } from "isomorphic-lib/src/mobilePush";
 import { unwrap } from "isomorphic-lib/src/resultHandling/resultUtils";
 import { defaultSmsDefinition } from "isomorphic-lib/src/sms";
 import { DEFAULT_WEBHOOK_DEFINITION } from "isomorphic-lib/src/webhook";
+import { defaultWhatsAppDefinition } from "isomorphic-lib/src/whatsApp";
 
 import { AppState } from "./types";
 
@@ -62,6 +64,112 @@ export async function serveSmsTemplate({
     messages: {
       type: CompletionStatus.Successful,
       value: [unwrap(enrichMessageTemplate(smsTemplateWithDefault))],
+    },
+    userProperties: {
+      type: CompletionStatus.Successful,
+      value: userProperties.flatMap((p) => unwrap(toUserPropertyResource(p))),
+    },
+  };
+}
+
+export async function serveMobilePushTemplate({
+  workspaceId,
+  messageTemplateId,
+  defaultName,
+}: {
+  workspaceId: string;
+  messageTemplateId: string;
+  defaultName?: string;
+}): Promise<Pick<AppState, "messages" | "userProperties">> {
+  const [mobilePushTemplate, userProperties] = await Promise.all([
+    db().query.messageTemplate.findFirst({
+      where: and(
+        eq(schema.messageTemplate.id, messageTemplateId),
+        eq(schema.messageTemplate.workspaceId, workspaceId),
+      ),
+    }),
+    db().query.userProperty.findMany({
+      where: eq(schema.userProperty.workspaceId, workspaceId),
+    }),
+  ]);
+
+  let mobilePushTemplateWithDefault: MessageTemplate;
+  if (!mobilePushTemplate) {
+    mobilePushTemplateWithDefault = await insert({
+      table: schema.messageTemplate,
+      values: {
+        workspaceId,
+        name: defaultName ?? `New Push Notification - ${messageTemplateId}`,
+        id: messageTemplateId,
+        definition: defaultMobilePushDefinition(),
+      },
+      lookupExisting: and(
+        eq(schema.messageTemplate.id, messageTemplateId),
+        eq(schema.messageTemplate.workspaceId, workspaceId),
+      )!,
+      doNothingOnConflict: true,
+    }).then(unwrap);
+  } else {
+    mobilePushTemplateWithDefault = mobilePushTemplate;
+  }
+
+  return {
+    messages: {
+      type: CompletionStatus.Successful,
+      value: [unwrap(enrichMessageTemplate(mobilePushTemplateWithDefault))],
+    },
+    userProperties: {
+      type: CompletionStatus.Successful,
+      value: userProperties.flatMap((p) => unwrap(toUserPropertyResource(p))),
+    },
+  };
+}
+
+export async function serveWhatsAppTemplate({
+  workspaceId,
+  messageTemplateId,
+  defaultName,
+}: {
+  workspaceId: string;
+  messageTemplateId: string;
+  defaultName?: string;
+}): Promise<Pick<AppState, "messages" | "userProperties">> {
+  const [whatsAppTemplate, userProperties] = await Promise.all([
+    db().query.messageTemplate.findFirst({
+      where: and(
+        eq(schema.messageTemplate.id, messageTemplateId),
+        eq(schema.messageTemplate.workspaceId, workspaceId),
+      ),
+    }),
+    db().query.userProperty.findMany({
+      where: eq(schema.userProperty.workspaceId, workspaceId),
+    }),
+  ]);
+
+  let whatsAppTemplateWithDefault: MessageTemplate;
+  if (!whatsAppTemplate) {
+    whatsAppTemplateWithDefault = await insert({
+      table: schema.messageTemplate,
+      values: {
+        workspaceId,
+        name: defaultName ?? `New WhatsApp Message - ${messageTemplateId}`,
+        id: messageTemplateId,
+        definition: defaultWhatsAppDefinition(),
+      },
+      lookupExisting: and(
+        eq(schema.messageTemplate.id, messageTemplateId),
+        eq(schema.messageTemplate.workspaceId, workspaceId),
+      )!,
+      doNothingOnConflict: true,
+    }).then(unwrap);
+  } else {
+    whatsAppTemplateWithDefault = whatsAppTemplate;
+  }
+
+  return {
+    messages: {
+      type: CompletionStatus.Successful,
+      value: [unwrap(enrichMessageTemplate(whatsAppTemplateWithDefault))],
     },
     userProperties: {
       type: CompletionStatus.Successful,

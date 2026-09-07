@@ -936,6 +936,13 @@ export async function userJourneyWorkflow(
             };
             break;
           }
+          case ChannelType.WhatsApp: {
+            variant = {
+              ...omit(currentNode.variant, ["type"]),
+              channel: currentNode.variant.type,
+            };
+            break;
+          }
         }
 
         const sendMesssageParams: SendParamsV2 = {

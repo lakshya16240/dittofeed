@@ -183,7 +183,6 @@ export type AppState = {
     | "dashboardWriteKey"
     | "enableSourceControl"
     | "sourceControlProvider"
-    | "enableMobilePush"
     | "enableAdditionalDashboardSettings"
     | "additionalDashboardSettingsPath"
     | "additionalDashboardSettingsTitle"

@@ -61,7 +61,7 @@ export const CREATE_INTERNAL_EVENTS_TABLE_MATERIALIZED_VIEW_QUERY = `
     JSONExtractString(properties, 'triggeringMessageId') as triggering_message_id,
     JSONExtractString(properties, 'variant', 'type') as channel_type,
     JSONExtractString(properties, 'variant', 'to') as delivery_to,
-    JSONExtractString(properties, 'variant', 'from') as delivery_from,
+    JSONExtractString(properties, 'variant', 'from')as delivery_from,
     JSONExtractString(properties, 'messageId') as origin_message_id,
     hidden
   FROM user_events_v2

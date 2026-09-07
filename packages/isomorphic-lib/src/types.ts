@@ -132,6 +132,7 @@ export const ChannelType = {
   MobilePush: "MobilePush",
   Sms: "Sms",
   Webhook: "Webhook",
+  WhatsApp: "WhatsApp",
 } as const;
 
 export const EmailProviderType = {
@@ -173,6 +174,19 @@ export type WorkspaceWideEmailProviders = Static<
 export enum MobilePushProviderType {
   Firebase = "Firebase",
   Test = "Test",
+}
+
+export enum WhatsAppProviderType {
+  Interakt = "Interakt",
+  Test = "Test",
+}
+
+// Which of the two Interakt accounts a template sends through. Interakt issues
+// separate keys for transactional and marketing traffic, and sending marketing
+// content on the transactional key risks the number's quality rating.
+export enum InteraktAccount {
+  Support = "support",
+  Campaign = "campaign",
 }
 
 export type ChannelType = (typeof ChannelType)[keyof typeof ChannelType];
@@ -1155,11 +1169,20 @@ export const WebhookMessageVariant = Type.Object({
 
 export type WebhookMessageVariant = Static<typeof WebhookMessageVariant>;
 
+export const WhatsAppMessageVariant = Type.Object({
+  type: Type.Literal(ChannelType.WhatsApp),
+  templateId: Type.String(),
+  providerOverride: Type.Optional(Type.Enum(WhatsAppProviderType)),
+});
+
+export type WhatsAppMessageVariant = Static<typeof WhatsAppMessageVariant>;
+
 export const MessageVariant = Type.Union([
   EmailMessageVariant,
   MobilePushMessageVariant,
   SmsMessageVariant,
   WebhookMessageVariant,
+  WhatsAppMessageVariant,
 ]);
 
 export type MessageVariant = Static<typeof MessageVariant>;
@@ -1735,20 +1758,87 @@ export const EmailConfiguration = Type.Composite([
 
 export type EmailConfiguration = Static<typeof EmailConfiguration>;
 
-export const MobilePushTemplateResource = Type.Object(
-  {
-    type: Type.Literal(ChannelType.MobilePush),
-    title: Type.Optional(Type.String()),
-    body: Type.Optional(Type.String()),
-    imageUrl: Type.Optional(Type.String()),
-    android: Type.Optional(
-      Type.Object({
-        notification: Type.Object({
-          channelId: Type.Optional(Type.String()),
-        }),
-      }),
-    ),
-  },
+// Flattened view of FCM's ApnsConfig. The wire format nests the interesting
+// fields under apns.payload.aps using kebab-case keys, which is hostile to
+// template authors; toFcmMessage re-nests them at send time.
+export const MobilePushApnsConfig = Type.Object({
+  subtitle: Type.Optional(Type.String()),
+  // String rather than integer so it can be liquid-templated, e.g.
+  // "{{ user.unreadCount }}". Parsed to an integer at send time.
+  badge: Type.Optional(Type.String()),
+  sound: Type.Optional(Type.String()),
+  threadId: Type.Optional(Type.String()),
+  category: Type.Optional(Type.String()),
+  contentAvailable: Type.Optional(Type.Boolean()),
+  mutableContent: Type.Optional(Type.Boolean()),
+  interruptionLevel: Type.Optional(
+    Type.Union([
+      Type.Literal("passive"),
+      Type.Literal("active"),
+      Type.Literal("time-sensitive"),
+      Type.Literal("critical"),
+    ]),
+  ),
+});
+
+export type MobilePushApnsConfig = Static<typeof MobilePushApnsConfig>;
+
+// Flattened view of FCM's AndroidConfig + AndroidNotification.
+export const MobilePushAndroidConfig = Type.Object({
+  channelId: Type.Optional(Type.String()),
+  priority: Type.Optional(
+    Type.Union([Type.Literal("normal"), Type.Literal("high")]),
+  ),
+  collapseKey: Type.Optional(Type.String()),
+  ttlSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+  icon: Type.Optional(Type.String()),
+  color: Type.Optional(Type.String()),
+  tag: Type.Optional(Type.String()),
+  clickAction: Type.Optional(Type.String()),
+});
+
+export type MobilePushAndroidConfig = Static<typeof MobilePushAndroidConfig>;
+
+export const MobilePushContents = Type.Object({
+  title: Type.Optional(Type.String()),
+  body: Type.Optional(Type.String()),
+  imageUrl: Type.Optional(Type.String()),
+  // A JSON object literal rather than a Record, because
+  // RenderMessageTemplateRequestContents is a flat Record<string, Content> and
+  // so can only preview flat string fields. Validated to parse into a
+  // Record<string, string> at upsert time.
+  data: Type.Optional(Type.String()),
+  identifierKey: Type.Optional(
+    Type.String({
+      description:
+        "Name of the user property holding the recipient's device token(s). " +
+        "May resolve to a single token string, or to a PerformedMany array of " +
+        "device registration events for multi-device fan-out. Defaults to " +
+        "'deviceToken'.",
+    }),
+  ),
+  maxDevices: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      maximum: 100,
+      description:
+        "Maximum number of devices to fan out to, most-recently-registered " +
+        "first. Defaults to 10.",
+    }),
+  ),
+  apns: Type.Optional(MobilePushApnsConfig),
+  android: Type.Optional(MobilePushAndroidConfig),
+});
+
+export type MobilePushContents = Static<typeof MobilePushContents>;
+
+export const MobilePushTemplateResource = Type.Composite(
+  [
+    Type.Object({
+      type: Type.Literal(ChannelType.MobilePush),
+    }),
+    MobilePushContents,
+  ],
   {
     description: "Mobile push template resource",
   },
@@ -1757,6 +1847,77 @@ export const MobilePushTemplateResource = Type.Object(
 export type MobilePushTemplateResource = Static<
   typeof MobilePushTemplateResource
 >;
+
+export const WhatsAppContents = Type.Object({
+  templateName: Type.String({
+    description:
+      "Name of the approved WhatsApp template (HSM) as registered with the " +
+      "provider. Must match exactly; a rename on the provider side silently " +
+      "breaks sends.",
+  }),
+  languageCode: Type.String({
+    description: "Template language code, e.g. 'en', 'en_US', 'hi'.",
+  }),
+  account: Type.Optional(
+    Type.Enum(InteraktAccount, {
+      description:
+        "Which provider account to send through. Defaults to 'campaign'.",
+    }),
+  ),
+  // Ordered, positional parameters. Each element is rendered through its own
+  // Liquid pass and only then assembled into the request, so a value
+  // containing a quote or newline cannot break the payload structure. This is
+  // the whole reason this is a first-class channel rather than a webhook
+  // template with a hand-written JSON body.
+  headerValues: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        "Header parameters, typically a single media URL for an image or " +
+        "video header.",
+    }),
+  ),
+  bodyValues: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        "Positional body parameters, filling {{1}}, {{2}}, ... in the " +
+        "approved template. Order is significant.",
+    }),
+  ),
+  // A JSON object literal rather than a Record, for the same reason as mobile
+  // push `data`: RenderMessageTemplateRequestContents is a flat
+  // Record<string, Content> and can only preview flat string fields.
+  // Validated to parse into Record<string, string[]> at upsert time.
+  buttonValues: Type.Optional(
+    Type.String({
+      description:
+        'JSON object keyed by button index, e.g. {"0": ["DRG-10422"]}. ' +
+        "Supplies the dynamic suffix for URL buttons.",
+    }),
+  ),
+  identifierKey: Type.Optional(
+    Type.String({
+      description:
+        "Name of the user property holding the recipient's phone number in " +
+        "E.164 form, e.g. '+919876543210'. Defaults to 'phone'.",
+    }),
+  ),
+});
+
+export type WhatsAppContents = Static<typeof WhatsAppContents>;
+
+export const WhatsAppTemplateResource = Type.Composite(
+  [
+    Type.Object({
+      type: Type.Literal(ChannelType.WhatsApp),
+    }),
+    WhatsAppContents,
+  ],
+  {
+    description: "WhatsApp template resource",
+  },
+);
+
+export type WhatsAppTemplateResource = Static<typeof WhatsAppTemplateResource>;
 
 const SmsContents = Type.Object({
   body: Type.String(),
@@ -1822,6 +1983,7 @@ export const MessageTemplateResourceDefinition = Type.Union([
   EmailTemplateResource,
   SmsTemplateResource,
   WebhookTemplateResource,
+  WhatsAppTemplateResource,
 ]);
 
 export type MessageTemplateResourceDefinition = Static<
@@ -1847,6 +2009,7 @@ export const MessageTemplateResourceDraft = Type.Union([
   EmailTemplateResource,
   SmsTemplateResource,
   WebhookTemplateResource,
+  WhatsAppTemplateResource,
 ]);
 
 export type MessageTemplateResourceDraft = Static<
@@ -2209,11 +2372,21 @@ export type WebhookMessageUiNodeProps = Static<
   typeof WebhookMessageUiNodeProps
 >;
 
+export const WhatsAppMessageUiNodeProps = Type.Object({
+  channel: Type.Literal(ChannelType.WhatsApp),
+  providerOverride: Type.Optional(Type.Enum(WhatsAppProviderType)),
+});
+
+export type WhatsAppMessageUiNodeProps = Static<
+  typeof WhatsAppMessageUiNodeProps
+>;
+
 export const MessageChannelUiNodeProps = Type.Union([
   EmailMessageUiNodeProps,
   SmsMessageUiNodeProps,
   MobilePushMessageUiNodeProps,
   WebhookMessageUiNodeProps,
+  WhatsAppMessageUiNodeProps,
 ]);
 
 export type MessageChannelUiNodeProps = Static<
@@ -2235,6 +2408,7 @@ export const MessageUiNodeProps = Type.Union([
   Type.Composite([BaseMessageUiNodeProps, EmailMessageUiNodeProps]),
   Type.Composite([BaseMessageUiNodeProps, SmsMessageUiNodeProps]),
   Type.Composite([BaseMessageUiNodeProps, MobilePushMessageUiNodeProps]),
+  Type.Composite([BaseMessageUiNodeProps, WhatsAppMessageUiNodeProps]),
   Type.Composite([BaseMessageUiNodeProps, WebhookMessageUiNodeProps]),
 ]);
 
@@ -4156,6 +4330,89 @@ export const MessageWebhookSuccess = Type.Object({
 
 export type MessageWebhookSuccess = Static<typeof MessageWebhookSuccess>;
 
+export const MobilePushDeviceSendStatusEnum = {
+  Sent: "Sent",
+  // Permanent: the token is dead and the device should stop being targeted.
+  Unregistered: "Unregistered",
+  // Transient or unclassified.
+  Failed: "Failed",
+} as const;
+
+export const MobilePushDeviceSendStatus = Type.KeyOf(
+  Type.Const(MobilePushDeviceSendStatusEnum),
+);
+
+export type MobilePushDeviceSendStatus = Static<
+  typeof MobilePushDeviceSendStatus
+>;
+
+export const MobilePushDeviceSendResult = Type.Object({
+  token: Type.String(),
+  deviceId: Type.Optional(Type.String()),
+  platform: Type.Optional(Type.String()),
+  status: MobilePushDeviceSendStatus,
+  fcmMessageId: Type.Optional(Type.String()),
+  errorCode: Type.Optional(Type.String()),
+  errorMessage: Type.Optional(Type.String()),
+});
+
+export type MobilePushDeviceSendResult = Static<
+  typeof MobilePushDeviceSendResult
+>;
+
+export const MobilePushServiceProviderSuccess = Type.Union([
+  Type.Object({ type: Type.Literal(MobilePushProviderType.Firebase) }),
+  Type.Object({ type: Type.Literal(MobilePushProviderType.Test) }),
+]);
+
+export type MobilePushServiceProviderSuccess = Static<
+  typeof MobilePushServiceProviderSuccess
+>;
+
+export const MessageMobilePushSuccess = Type.Composite([
+  Type.Object({
+    type: Type.Literal(ChannelType.MobilePush),
+    provider: MobilePushServiceProviderSuccess,
+    // The primary (first deduped) device token. Kept a scalar because
+    // deliveries sort and search on $.variant.to.
+    to: Type.String(),
+    devices: Type.Array(MobilePushDeviceSendResult),
+    sentCount: Type.Integer(),
+    failureCount: Type.Integer(),
+  }),
+  // The rendered contents, so the delivery drill-down shows what was sent.
+  Type.Omit(MobilePushContents, ["maxDevices"]),
+]);
+
+export type MessageMobilePushSuccess = Static<typeof MessageMobilePushSuccess>;
+
+export const WhatsAppServiceProviderSuccess = Type.Union([
+  Type.Object({ type: Type.Literal(WhatsAppProviderType.Interakt) }),
+  Type.Object({ type: Type.Literal(WhatsAppProviderType.Test) }),
+]);
+
+export type WhatsAppServiceProviderSuccess = Static<
+  typeof WhatsAppServiceProviderSuccess
+>;
+
+export const MessageWhatsAppSuccess = Type.Composite([
+  Type.Object({
+    type: Type.Literal(ChannelType.WhatsApp),
+    provider: WhatsAppServiceProviderSuccess,
+    // The recipient in E.164 form. Deliveries sort and search on
+    // $.variant.to, so this has to stay a scalar.
+    to: Type.String(),
+    // The provider's own message id, when it returns one. Not indexed, but it
+    // is what support needs to trace a message in the provider's console.
+    providerMessageId: Type.Optional(Type.String()),
+    providerResponse: Type.Optional(Type.Unknown()),
+  }),
+  // The rendered contents, so the delivery drill-down shows what was sent.
+  WhatsAppContents,
+]);
+
+export type MessageWhatsAppSuccess = Static<typeof MessageWhatsAppSuccess>;
+
 export const MessageSkipped = Type.Object({
   type: Type.Literal(InternalEventType.MessageSkipped),
   message: Type.Optional(Type.String()),
@@ -4167,6 +4424,8 @@ export const MessageSendSuccessVariant = Type.Union([
   MessageEmailSuccess,
   MessageSmsSuccess,
   MessageWebhookSuccess,
+  MessageMobilePushSuccess,
+  MessageWhatsAppSuccess,
 ]);
 
 export type MessageSendSuccessVariant = Static<
@@ -4474,10 +4733,42 @@ export type MessageWebhookServiceFailure = Static<
   typeof MessageWebhookServiceFailure
 >;
 
+export const MessageMobilePushServiceFailure = Type.Object({
+  type: Type.Literal(ChannelType.MobilePush),
+  provider: Type.Object({
+    type: Type.Literal(MobilePushProviderType.Firebase),
+  }),
+  devices: Type.Optional(Type.Array(MobilePushDeviceSendResult)),
+  code: Type.Optional(Type.String()),
+  message: Type.Optional(Type.String()),
+});
+
+export type MessageMobilePushServiceFailure = Static<
+  typeof MessageMobilePushServiceFailure
+>;
+
+export const MessageWhatsAppServiceFailure = Type.Object({
+  type: Type.Literal(ChannelType.WhatsApp),
+  provider: Type.Object({
+    type: Type.Literal(WhatsAppProviderType.Interakt),
+  }),
+  // HTTP status when the provider answered, absent on a transport error.
+  status: Type.Optional(Type.Number()),
+  code: Type.Optional(Type.String()),
+  message: Type.Optional(Type.String()),
+  providerResponse: Type.Optional(Type.Unknown()),
+});
+
+export type MessageWhatsAppServiceFailure = Static<
+  typeof MessageWhatsAppServiceFailure
+>;
+
 export const MessageServiceFailureVariant = Type.Union([
   MessageEmailServiceFailure,
   MessageSmsServiceFailure,
   MessageWebhookServiceFailure,
+  MessageMobilePushServiceFailure,
+  MessageWhatsAppServiceFailure,
 ]);
 
 export type MessageServiceFailureVariant = Static<
@@ -4503,6 +4794,7 @@ export type UserSubscriptionAction = Static<typeof UserSubscriptionAction>;
 export enum MessageSkippedType {
   SubscriptionState = "SubscriptionState",
   MissingIdentifier = "MissingIdentifier",
+  NoReachableDevices = "NoReachableDevices",
 }
 
 export const MessageSkippedSubscriptionState = Type.Object({
@@ -4520,9 +4812,22 @@ export const MessageSkippedMissingIdentifier = Type.Object({
   identifierKey: Type.String(),
 });
 
+// Distinct from MissingIdentifier: the user has registered devices, but every
+// one of their tokens has been rejected by FCM as unregistered.
+export const MessageSkippedNoReachableDevices = Type.Object({
+  type: Type.Literal(MessageSkippedType.NoReachableDevices),
+  identifierKey: Type.String(),
+  devices: Type.Optional(Type.Array(MobilePushDeviceSendResult)),
+});
+
+export type MessageSkippedNoReachableDevices = Static<
+  typeof MessageSkippedNoReachableDevices
+>;
+
 export const MessageSkippedVariant = Type.Union([
   MessageSkippedSubscriptionState,
   MessageSkippedMissingIdentifier,
+  MessageSkippedNoReachableDevices,
 ]);
 
 export type MessageSkippedVariant = Static<typeof MessageSkippedVariant>;
@@ -4607,8 +4912,19 @@ export type WebhookMessageTemplateTestRequest = Static<
   typeof WebhookMessageTemplateTestRequest
 >;
 
+export const WhatsAppMessageTemplateTestRequest = Type.Object({
+  ...BaseMessageTemplateTestRequest,
+  channel: Type.Literal(ChannelType.WhatsApp),
+  provider: Type.Optional(Type.Enum(WhatsAppProviderType)),
+});
+
+export type WhatsAppMessageTemplateTestRequest = Static<
+  typeof WhatsAppMessageTemplateTestRequest
+>;
+
 export const MessageTemplateTestRequest = Type.Union([
   EmailMessageTemplateTestRequest,
+  WhatsAppMessageTemplateTestRequest,
   SmsMessageTemplateTestRequest,
   MobilePushMessageTemplateTestRequest,
   WebhookMessageTemplateTestRequest,
@@ -4674,6 +4990,20 @@ export const SearchDeliveriesResponseItem = Type.Union([
     Type.Object({
       status: Type.String(),
       variant: MessageWebhookSuccess,
+    }),
+    BaseDeliveryItem,
+  ]),
+  Type.Composite([
+    Type.Object({
+      status: Type.String(),
+      variant: MessageMobilePushSuccess,
+    }),
+    BaseDeliveryItem,
+  ]),
+  Type.Composite([
+    Type.Object({
+      status: Type.String(),
+      variant: MessageWhatsAppSuccess,
     }),
     BaseDeliveryItem,
   ]),
@@ -4859,6 +5189,27 @@ export const WebhookSecret = Type.Intersect([
 export type WebhookSecret = Static<typeof WebhookSecret>;
 
 export type WebhookProviderSecret = Static<typeof WebhookSecret>;
+
+// Holds a Google service account key as the raw JSON downloaded from the
+// Firebase console, so it can be pasted in verbatim. Parsed and validated
+// against FcmKey at send time.
+export const FcmSecret = Type.Object({
+  type: Type.Literal(MobilePushProviderType.Firebase),
+  key: Type.String(),
+});
+
+export type FcmSecret = Static<typeof FcmSecret>;
+
+// Interakt issues one pre-encoded Basic key per account. Both are optional so
+// a workspace can configure only the account it actually uses; the send path
+// fails with a clear provider error when the selected one is absent.
+export const InteraktSecret = Type.Object({
+  type: Type.Literal(WhatsAppProviderType.Interakt),
+  supportKey: Type.Optional(Type.String()),
+  campaignKey: Type.Optional(Type.String()),
+});
+
+export type InteraktSecret = Static<typeof InteraktSecret>;
 
 export const EmailProviderSecret = Type.Union([
   MailChimpSecret,

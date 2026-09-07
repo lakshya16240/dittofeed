@@ -54,6 +54,7 @@ import {
 } from "@tanstack/react-table";
 import { AxiosError } from "axios";
 import formatDistanceToNow from "date-fns/formatDistanceToNow";
+import { messageTemplatePath } from "isomorphic-lib/src/messageTemplates";
 import { assertUnreachable } from "isomorphic-lib/src/typeAssertions";
 import {
   ChannelType,
@@ -256,29 +257,11 @@ function NameCell({ row, getValue }: CellContext<Row, unknown>) {
   const universalRouter = useUniversalRouter();
   const { id: templateId, definition } = row.original;
 
-  let channelPath = "unknown";
-  if (definition) {
-    switch (definition.type) {
-      case ChannelType.Email:
-        channelPath = "email";
-        break;
-      case ChannelType.Sms:
-        channelPath = "sms";
-        break;
-      case ChannelType.MobilePush:
-        channelPath = "mobilepush";
-        break;
-      case ChannelType.Webhook:
-        channelPath = "webhook";
-        break;
-      default:
-        assertUnreachable(definition);
-    }
-  }
-
   // Construct channel-specific route
   const href = universalRouter.mapUrl(
-    `/templates/${channelPath}/${templateId}`,
+    definition
+      ? messageTemplatePath({ id: templateId, channel: definition.type })
+      : `/templates/unknown/${templateId}`,
   );
 
   return (
@@ -327,6 +310,9 @@ function ChannelCell({ row }: CellContext<Row, unknown>) {
         break;
       case ChannelType.Webhook:
         channelText = "Webhook";
+        break;
+      case ChannelType.WhatsApp:
+        channelText = "WhatsApp";
         break;
       default:
         assertUnreachable(definition);
@@ -527,27 +513,10 @@ export default function TemplatesTable({
         setSnackbarOpen(true);
         handleCloseDialog();
 
-        // Get channel path for navigation
-        let channelPath = "unknown";
-        switch (selectedChannel) {
-          case ChannelType.Email:
-            channelPath = "email";
-            break;
-          case ChannelType.Sms:
-            channelPath = "sms";
-            break;
-          case ChannelType.MobilePush:
-            channelPath = "mobilepush";
-            break;
-          case ChannelType.Webhook:
-            channelPath = "webhook";
-            break;
-          default:
-            assertUnreachable(selectedChannel);
-        }
-
         // Navigate to channel-specific template edit page
-        universalRouter.push(`/templates/${channelPath}/${data.id}`);
+        universalRouter.push(
+          messageTemplatePath({ id: data.id, channel: selectedChannel }),
+        );
       },
       onError: (error) => {
         const errorMsg = error.message || "Failed to create template.";
@@ -587,6 +556,8 @@ export default function TemplatesTable({
                 return "Mobile Push";
               case ChannelType.Webhook:
                 return "Webhook";
+              case ChannelType.WhatsApp:
+                return "WhatsApp";
               default:
                 assertUnreachable(row.definition);
                 return "Unknown";

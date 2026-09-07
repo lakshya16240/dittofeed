@@ -74,6 +74,10 @@ export interface SecretEditorProps {
   // used to describe the secret in the UI
   label?: string;
   helperText?: string;
+  // for large pasted secrets such as a service account JSON, which are
+  // unreviewable in a single-line field
+  multiline?: boolean;
+  rows?: number;
 }
 
 function initialState(saved: boolean): SecretState {
@@ -110,6 +114,8 @@ function SecretTextField({
   onChange,
   helperText,
   label,
+  multiline,
+  rows,
 }: {
   autoFocus?: boolean;
   onVisibilityChange: () => void;
@@ -117,28 +123,39 @@ function SecretTextField({
   label?: string;
   onChange: React.ComponentProps<typeof TextField>["onChange"];
   helperText?: string;
+  multiline?: boolean;
+  rows?: number;
 }) {
   return (
     <SimpleTextField
       autoFocus={autoFocus}
-      type={showValue ? "text" : "password"}
+      // MUI ignores type="password" on a multiline field, and the masking
+      // adornment would imply a masking that is not happening. The value is
+      // visible while being entered and masked to ********** once saved.
+      type={multiline ? undefined : showValue ? "text" : "password"}
+      multiline={multiline}
+      rows={multiline ? rows : undefined}
       sx={{ flex: 1 }}
       label={label}
       onChange={onChange}
       helperText={helperText}
-      InputProps={{
-        endAdornment: (
-          <InputAdornment position="end">
-            <IconButton
-              aria-label="toggle secret visibility"
-              onClick={onVisibilityChange}
-              onMouseDown={onVisibilityChange}
-            >
-              {showValue ? <Visibility /> : <VisibilityOff />}
-            </IconButton>
-          </InputAdornment>
-        ),
-      }}
+      InputProps={
+        multiline
+          ? undefined
+          : {
+              endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton
+                    aria-label="toggle secret visibility"
+                    onClick={onVisibilityChange}
+                    onMouseDown={onVisibilityChange}
+                  >
+                    {showValue ? <Visibility /> : <VisibilityOff />}
+                  </IconButton>
+                </InputAdornment>
+              ),
+            }
+      }
     />
   );
 }
@@ -180,6 +197,8 @@ function SecretEditorLoaded({
   secretKey,
   label,
   helperText,
+  multiline,
+  rows,
   handleDelete,
   handleUpdate,
 }: Overwrite<SecretEditorProps, { saved: boolean }> & SecretEditorUpdateProps) {
@@ -252,6 +271,8 @@ function SecretEditorLoaded({
           <SecretTextField
             helperText={helperText}
             label={label}
+            multiline={multiline}
+            rows={rows}
             onChange={(e) => {
               setState((draft) => {
                 if (draft.editingState.type !== SecretStateType.SavedEditing) {
@@ -304,6 +325,8 @@ function SecretEditorLoaded({
           <SecretTextField
             label={label}
             helperText={helperText}
+            multiline={multiline}
+            rows={rows}
             onVisibilityChange={() => setState(toggleVisibility)}
             onChange={(e) => {
               setState((draft) => {

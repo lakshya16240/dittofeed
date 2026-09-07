@@ -37,6 +37,7 @@ export const dbChannelType = pgEnum("DBChannelType", [
   "MobilePush",
   "Sms",
   "Webhook",
+  "WhatsApp",
 ]);
 export const dbCompletionStatus = pgEnum("DBCompletionStatus", [
   "NotStarted",

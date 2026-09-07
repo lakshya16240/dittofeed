@@ -41,8 +41,10 @@ import { useImmer } from "use-immer";
 import { validate } from "uuid";
 
 import EmailEditor from "../../../components/messages/emailEditor";
+import MobilePushEditor from "../../../components/messages/mobilePushEditor";
 import SmsEditor from "../../../components/messages/smsEditor";
 import WebhookEditor from "../../../components/messages/webhookEditor";
+import WhatsAppEditor from "../../../components/messages/whatsAppEditor";
 import SubscriptionGroupAutocomplete from "../../../components/subscriptionGroupAutocomplete";
 import { addInitialStateToProps } from "../../../lib/addInitialStateToProps";
 import apiRequestHandlerFactory from "../../../lib/apiRequestHandlerFactory";
@@ -345,7 +347,15 @@ const BroadcastTemplateInner: NextPage<BroadcastTemplateProps> =
         );
         break;
       case ChannelType.MobilePush:
-        throw new Error("MobilePush not implemented");
+        templateEditor = (
+          <MobilePushEditor
+            templateId={templateId}
+            hideTitle
+            hidePublisher
+            disabled={disabled}
+          />
+        );
+        break;
       case ChannelType.Webhook:
         templateEditor = (
           <WebhookEditor
@@ -353,6 +363,16 @@ const BroadcastTemplateInner: NextPage<BroadcastTemplateProps> =
             hideTitle
             hidePublisher
             templateId={templateId}
+          />
+        );
+        break;
+      case ChannelType.WhatsApp:
+        templateEditor = (
+          <WhatsAppEditor
+            templateId={templateId}
+            hideTitle
+            hidePublisher
+            disabled={disabled}
           />
         );
         break;
@@ -388,7 +408,7 @@ const BroadcastTemplateInner: NextPage<BroadcastTemplateProps> =
           <MenuItem value={ChannelType.Webhook}>
             {CHANNEL_NAMES[ChannelType.Webhook]}
           </MenuItem>
-          <MenuItem disabled value={ChannelType.MobilePush}>
+          <MenuItem value={ChannelType.MobilePush}>
             {CHANNEL_NAMES[ChannelType.MobilePush]}
           </MenuItem>
         </Select>

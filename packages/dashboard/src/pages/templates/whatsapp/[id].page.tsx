@@ -3,11 +3,11 @@ import { useRouter } from "next/router";
 import React from "react";
 import { validate } from "uuid";
 
-import MobilePushEditor from "../../../components/messages/mobilePushEditor";
 import TemplatePageContent from "../../../components/messages/templatePageContent";
+import WhatsAppEditor from "../../../components/messages/whatsAppEditor";
 import { addInitialStateToProps } from "../../../lib/addInitialStateToProps";
 import { useAppStorePick } from "../../../lib/appStore";
-import { serveMobilePushTemplate } from "../../../lib/messaging";
+import { serveWhatsAppTemplate } from "../../../lib/messaging";
 import { requestContext } from "../../../lib/requestContext";
 import { PropsWithInitialState } from "../../../lib/types";
 
@@ -26,7 +26,7 @@ export const getServerSideProps: GetServerSideProps<PropsWithInitialState> =
       name = ctx.query.name;
     }
 
-    const mobilePushTemplateState = await serveMobilePushTemplate({
+    const whatsAppTemplateState = await serveWhatsAppTemplate({
       workspaceId: dfContext.workspace.id,
       messageTemplateId: id,
       defaultName: name,
@@ -35,7 +35,7 @@ export const getServerSideProps: GetServerSideProps<PropsWithInitialState> =
     return {
       props: addInitialStateToProps({
         dfContext,
-        serverInitialState: mobilePushTemplateState,
+        serverInitialState: whatsAppTemplateState,
         props: {},
       }),
     };
@@ -51,7 +51,7 @@ export default function MessageEditor() {
   }
   return (
     <TemplatePageContent>
-      <MobilePushEditor
+      <WhatsAppEditor
         key={messageId}
         templateId={messageId}
         member={member ?? undefined}

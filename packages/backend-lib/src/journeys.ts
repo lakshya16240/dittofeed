@@ -451,6 +451,11 @@ export async function getJourneyMessageStats({
           // TODO [DF-471]
           continue;
         }
+        case ChannelType.WhatsApp: {
+          // No per-channel stats until the provider's delivery-receipt events
+          // are ingested; sendRate above is already correct for this node.
+          continue;
+        }
         default:
           assertUnreachable(node.channel);
       }

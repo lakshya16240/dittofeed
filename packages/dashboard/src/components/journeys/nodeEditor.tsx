@@ -43,6 +43,7 @@ import {
   SmsProviderType,
   TwilioSenderOverrideType,
   WorkspaceWideEmailProviders,
+  WhatsAppProviderType,
 } from "isomorphic-lib/src/types";
 import { ReactNode, useCallback, useMemo } from "react";
 
@@ -400,12 +401,10 @@ function MessageNodeFields({
   nodeProps: MessageUiNodeProps;
   disabled?: boolean;
 }) {
-  const { enableMobilePush, updateJourneyNodeData, journeyName } =
-    useAppStorePick([
-      "enableMobilePush",
-      "updateJourneyNodeData",
-      "journeyName",
-    ]);
+  const { updateJourneyNodeData, journeyName } = useAppStorePick([
+    "updateJourneyNodeData",
+    "journeyName",
+  ]);
   const { data: subscriptionGroups } = useSubscriptionGroupsQuery();
 
   const onNameChangeHandler: React.ChangeEventHandler<
@@ -475,6 +474,11 @@ function MessageNodeFields({
               // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
               (provider as MobilePushProviderType | null) ?? undefined;
             break;
+          case ChannelType.WhatsApp:
+            props.providerOverride =
+              // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+              (provider as WhatsAppProviderType | null) ?? undefined;
+            break;
         }
       }
     });
@@ -482,7 +486,9 @@ function MessageNodeFields({
   let providerOverrideEl: React.ReactNode;
   if (
     nodeProps.channel === ChannelType.Email ||
-    nodeProps.channel === ChannelType.Sms
+    nodeProps.channel === ChannelType.Sms ||
+    nodeProps.channel === ChannelType.MobilePush ||
+    nodeProps.channel === ChannelType.WhatsApp
   ) {
     providerOverrideEl = (
       <ChannelProviderAutocomplete
@@ -713,9 +719,8 @@ function MessageNodeFields({
           <MenuItem value={ChannelType.Email}>Email</MenuItem>
           <MenuItem value={ChannelType.Sms}>SMS</MenuItem>
           <MenuItem value={ChannelType.Webhook}>Webhook</MenuItem>
-          <MenuItem disabled={!enableMobilePush} value={ChannelType.MobilePush}>
-            Mobile Push
-          </MenuItem>
+          <MenuItem value={ChannelType.MobilePush}>Mobile Push</MenuItem>
+          <MenuItem value={ChannelType.WhatsApp}>WhatsApp</MenuItem>
         </Select>
       </FormControl>
       <ResourceSelect

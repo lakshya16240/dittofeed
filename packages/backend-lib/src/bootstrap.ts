@@ -4,6 +4,10 @@ import {
   DEBUG_USER_ID1,
   WORKSPACE_TOMBSTONE_PREFIX,
 } from "isomorphic-lib/src/constants";
+import {
+  DEFAULT_DEVICE_TOKEN_IDENTIFIER,
+  DEVICE_REGISTERED_EVENT,
+} from "isomorphic-lib/src/mobilePush";
 import { unwrap } from "isomorphic-lib/src/resultHandling/resultUtils";
 import { jsonParseSafeWithSchema } from "isomorphic-lib/src/resultHandling/schemaValidation";
 import Long from "long";
@@ -222,6 +226,34 @@ export async function bootstrapPostgres({
       },
       exampleValue:
         '"1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"',
+    },
+    {
+      // Multi-device push. Backed by DeviceRegistered track events rather than
+      // a trait, so a user can be reached on every device they have registered.
+      // Mobile SDKs emit the event on cold start and on token refresh, which is
+      // also what lets dead devices age out of the fan-out window.
+      name: DEFAULT_DEVICE_TOKEN_IDENTIFIER,
+      workspaceId,
+      definition: {
+        type: UserPropertyDefinitionType.PerformedMany,
+        or: [{ event: DEVICE_REGISTERED_EVENT }],
+      },
+      exampleValue: JSON.stringify(
+        [
+          {
+            event: DEVICE_REGISTERED_EVENT,
+            timestamp: "2024-01-01T00:00:00",
+            properties: {
+              deviceToken:
+                "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+              deviceId: "6f1e5a52-3b7c-4f0e-9d2a-1c8b4e7f0a93",
+              platform: "android",
+            },
+          },
+        ],
+        null,
+        2,
+      ),
     },
     {
       name: "firstName",

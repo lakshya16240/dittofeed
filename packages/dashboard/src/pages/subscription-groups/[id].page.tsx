@@ -56,12 +56,10 @@ export default function SubscriptionGroupConfig() {
     setSubscriptionGroupUpdateRequest,
     apiBase,
     upsertSubscriptionGroup,
-    enableMobilePush,
   } = useAppStorePick([
     "subscriptionGroupUpdateRequest",
     "setSubscriptionGroupUpdateRequest",
     "apiBase",
-    "enableMobilePush",
     "upsertSubscriptionGroup",
   ]);
 
@@ -244,10 +242,7 @@ export default function SubscriptionGroupConfig() {
               <MenuItem value={ChannelType.Email}>Email</MenuItem>
               <MenuItem value={ChannelType.Sms}>SMS</MenuItem>
               <MenuItem value={ChannelType.Webhook}>Webhook</MenuItem>
-              <MenuItem
-                disabled={!enableMobilePush}
-                value={ChannelType.MobilePush}
-              >
+              <MenuItem value={ChannelType.MobilePush}>
                 Mobile Push
               </MenuItem>
             </Select>

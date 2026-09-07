@@ -25,6 +25,7 @@ import { validate as validateUuid } from "uuid";
 
 import { submitBatch } from "./apps/batch";
 import { getObject, storage } from "./blobStorage";
+import config from "./config";
 import { MESSAGE_METADATA_FIELDS } from "./constants";
 import { db, TxQueryError, txQueryResult } from "./db";
 import {
@@ -42,6 +43,11 @@ import {
   sendMail as sendMailAmazonSes,
   SesMailData,
 } from "./destinations/amazonses";
+import { sendFcmMulticast } from "./destinations/fcm";
+import {
+  selectInteraktKey,
+  sendInteraktTemplate,
+} from "./destinations/interakt";
 import { sendMail as sendMailMailchimp } from "./destinations/mailchimp";
 import { sendMail as sendMailPostMark } from "./destinations/postmark";
 import {
@@ -64,14 +70,34 @@ import {
   sendGmailEmail,
   SendGmailEmailParams,
 } from "./gmail";
-import config from "./config";
 import { renderLiquid } from "./liquid";
-import { storeEmailForViewInBrowser } from "./viewInBrowser";
 import logger from "./logger";
 import {
   constructUnsubscribeHeaders,
   UnsubscribeHeaders,
 } from "./messaging/email";
+import {
+  collectMobilePushTemplates,
+  DEFAULT_MAX_DEVICES,
+  inflateMobilePushTemplates,
+  isConfigCode,
+  isInvalidArgumentCode,
+  isTransientCode,
+  isUnregisteredCode,
+  resolveDeviceTokens,
+  toFcmMessage,
+} from "./messaging/mobilePush";
+import {
+  collectWhatsAppTemplates,
+  extractInteraktErrorMessage,
+  extractInteraktMessageId,
+  inflateWhatsAppTemplates,
+  isAuthStatus,
+  isInteraktSuccessBody,
+  isTransientStatus,
+  resolveInteraktAccount,
+  toInteraktPayload,
+} from "./messaging/whatsApp";
 import { withSpan } from "./openTelemetry";
 import {
   getSubscriptionGroupDetails,
@@ -94,8 +120,12 @@ import {
   EmailProviderType,
   EmailProviderTypeSchema,
   EventType,
+  FcmSecret,
+  InteraktSecret,
   InternalEventType,
   KnownBatchTrackData,
+  MessageMobilePushServiceFailure,
+  MessageMobilePushSuccess,
   MessageSendFailure,
   MessageSkippedType,
   MessageTags,
@@ -107,6 +137,9 @@ import {
   MessageTemplateTestRequest,
   MessageWebhookServiceFailure,
   MessageWebhookSuccess,
+  MessageWhatsAppServiceFailure,
+  MessageWhatsAppSuccess,
+  MobilePushDeviceSendResult,
   MobilePushProviderType,
   NonRetryableMessageSendFailure,
   ParsedWebhookBody,
@@ -128,9 +161,11 @@ import {
   WebhookConfig,
   WebhookResponse,
   WebhookSecret,
+  WhatsAppProviderType,
 } from "./types";
 import { UserPropertyAssignments } from "./userProperties";
 import { getUsers } from "./users";
+import { storeEmailForViewInBrowser } from "./viewInBrowser";
 import { isWorkspaceOccupantType } from "./workspaceOccupantSettings";
 
 export function enrichMessageTemplate({
@@ -531,7 +566,9 @@ export type SendMessageParametersSms = SendMessageParametersBase &
 export interface SendMessageParametersMobilePush
   extends SendMessageParametersBase {
   channel: (typeof ChannelType)["MobilePush"];
-  provider?: MobilePushProviderType;
+  // Named to match the journey node's MobilePushMessageVariant field, so the
+  // variant can be spread straight through in userWorkflow.ts.
+  providerOverride?: MobilePushProviderType;
 }
 
 export interface SendMessageParametersWebhook
@@ -539,11 +576,20 @@ export interface SendMessageParametersWebhook
   channel: (typeof ChannelType)["Webhook"];
 }
 
+export interface SendMessageParametersWhatsApp
+  extends SendMessageParametersBase {
+  channel: (typeof ChannelType)["WhatsApp"];
+  // Named to match the journey node's WhatsAppMessageVariant field, so the
+  // variant can be spread straight through in userWorkflow.ts.
+  providerOverride?: WhatsAppProviderType;
+}
+
 export type SendMessageParameters =
   | SendMessageParametersEmail
   | SendMessageParametersSms
   | SendMessageParametersWebhook
-  | SendMessageParametersMobilePush;
+  | SendMessageParametersMobilePush
+  | SendMessageParametersWhatsApp;
 
 type TemplateDictionary<T> = {
   [K in keyof T]: {
@@ -2383,6 +2429,514 @@ export async function sendWebhook({
   }
 }
 
+export async function sendMobilePush(
+  params: Omit<SendMessageParametersMobilePush, "channel">,
+): Promise<BackendMessageSendResult> {
+  const {
+    workspaceId,
+    templateId,
+    userPropertyAssignments,
+    subscriptionGroupDetails,
+    useDraft,
+    messageTags,
+    isPreview,
+    providerOverride,
+  } = params;
+
+  const [getSendModelsResult, secret] = await Promise.all([
+    getSendMessageModels({
+      workspaceId,
+      templateId,
+      channel: ChannelType.MobilePush,
+      useDraft,
+      subscriptionGroupDetails,
+    }),
+    db().query.secret.findFirst({
+      where: and(
+        eq(dbSecret.workspaceId, workspaceId),
+        eq(dbSecret.name, SecretNames.Fcm),
+      ),
+    }),
+  ]);
+  if (getSendModelsResult.isErr()) {
+    return err(getSendModelsResult.error);
+  }
+  const { messageTemplateDefinition } = getSendModelsResult.value;
+
+  if (messageTemplateDefinition.type !== ChannelType.MobilePush) {
+    return err({
+      type: InternalEventType.BadWorkspaceConfiguration,
+      variant: {
+        type: BadWorkspaceConfigurationType.MessageTemplateMisconfigured,
+        message: "message template is not a mobile push template",
+      },
+    });
+  }
+
+  // The Test provider renders and resolves devices but never calls FCM, so a
+  // template preview cannot buzz a real phone.
+  const isTestProvider = providerOverride === MobilePushProviderType.Test;
+
+  let fcmKey: FcmSecret | null = null;
+  if (!isTestProvider) {
+    if (!secret?.configValue) {
+      return err({
+        type: InternalEventType.BadWorkspaceConfiguration,
+        variant: {
+          type: BadWorkspaceConfigurationType.MessageServiceProviderNotFound,
+        },
+      });
+    }
+    const parsedSecret = schemaValidateWithErr(secret.configValue, FcmSecret);
+    if (parsedSecret.isErr()) {
+      return err({
+        type: InternalEventType.BadWorkspaceConfiguration,
+        variant: {
+          type: BadWorkspaceConfigurationType.MessageServiceProviderMisconfigured,
+          message: parsedSecret.error.message,
+        },
+      });
+    }
+    fcmKey = parsedSecret.value;
+  }
+
+  const identifierKey =
+    messageTemplateDefinition.identifierKey ??
+    CHANNEL_IDENTIFIERS[ChannelType.MobilePush];
+
+  const renderedValuesResult = renderValues({
+    userProperties: userPropertyAssignments,
+    identifierKey,
+    subscriptionGroupId: subscriptionGroupDetails?.id,
+    workspaceId,
+    tags: messageTags,
+    isPreview,
+    templates: collectMobilePushTemplates(messageTemplateDefinition),
+  });
+  if (renderedValuesResult.isErr()) {
+    const { error, field } = renderedValuesResult.error;
+    return err({
+      type: InternalEventType.BadWorkspaceConfiguration,
+      variant: {
+        type: BadWorkspaceConfigurationType.MessageTemplateRenderError,
+        field,
+        error,
+      },
+    });
+  }
+  const contents = inflateMobilePushTemplates(
+    renderedValuesResult.value,
+    messageTemplateDefinition,
+  );
+
+  if (!contents.title && !contents.body && !contents.data) {
+    return err({
+      type: InternalEventType.BadWorkspaceConfiguration,
+      variant: {
+        type: BadWorkspaceConfigurationType.MessageTemplateMisconfigured,
+        message:
+          "mobile push template must render a title, body, or data payload",
+      },
+    });
+  }
+
+  const fcmMessageResult = toFcmMessage(contents);
+  if (fcmMessageResult.isErr()) {
+    return err({
+      type: InternalEventType.BadWorkspaceConfiguration,
+      variant: {
+        type: BadWorkspaceConfigurationType.MessageTemplateMisconfigured,
+        message: fcmMessageResult.error.message,
+      },
+    });
+  }
+
+  const devices = resolveDeviceTokens(userPropertyAssignments[identifierKey], {
+    maxDevices: messageTemplateDefinition.maxDevices ?? DEFAULT_MAX_DEVICES,
+  });
+  if (devices.length === 0) {
+    return err({
+      type: InternalEventType.MessageSkipped,
+      variant: {
+        type: MessageSkippedType.MissingIdentifier,
+        identifierKey,
+      },
+    });
+  }
+
+  // The primary device -- first after recency-ordered dedupe, not the first
+  // that happens to succeed, so `to` stays stable across retries and partial
+  // failures. Deliveries sort and search on this as a scalar.
+  const to = devices[0]?.token ?? "";
+
+  if (isTestProvider) {
+    return ok({
+      type: InternalEventType.MessageSent,
+      variant: {
+        type: ChannelType.MobilePush,
+        provider: { type: MobilePushProviderType.Test },
+        to,
+        devices: devices.map((d) => ({
+          ...d,
+          status: "Sent" as const,
+        })),
+        sentCount: devices.length,
+        failureCount: 0,
+        ...contents,
+      } satisfies MessageMobilePushSuccess,
+    });
+  }
+
+  if (!fcmKey) {
+    return err({
+      type: InternalEventType.BadWorkspaceConfiguration,
+      variant: {
+        type: BadWorkspaceConfigurationType.MessageServiceProviderNotFound,
+      },
+    });
+  }
+
+  const sendResult = await sendFcmMulticast({
+    workspaceId,
+    key: fcmKey.key,
+    tokens: devices.map((d) => d.token),
+    message: fcmMessageResult.value,
+  });
+
+  if (sendResult.isErr()) {
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+    const { code } = sendResult.error as { code?: string };
+    if (isTransientCode(code)) {
+      // Thrown, not returned: per this module's contract a thrown error is
+      // retryable. Nothing was delivered, so a retry is safe.
+      throw sendResult.error;
+    }
+    return err({
+      type: InternalEventType.BadWorkspaceConfiguration,
+      variant: {
+        type: BadWorkspaceConfigurationType.MessageServiceProviderMisconfigured,
+        message: sendResult.error.message,
+      },
+    });
+  }
+
+  const { responses } = sendResult.value;
+  const anySucceeded = responses.some((r) => r.success);
+
+  const deviceResults: MobilePushDeviceSendResult[] = devices.map((d, i) => {
+    const response = responses[i];
+    if (response?.success) {
+      return { ...d, status: "Sent", fcmMessageId: response.messageId };
+    }
+    const code = response?.error?.code;
+    // invalid-argument means a dead token only if the payload was evidently
+    // fine for someone else; otherwise it is the payload, not the device.
+    const unregistered =
+      isUnregisteredCode(code) || (isInvalidArgumentCode(code) && anySucceeded);
+    return {
+      ...d,
+      status: unregistered ? "Unregistered" : "Failed",
+      errorCode: code,
+      errorMessage: response?.error?.message,
+    };
+  });
+
+  const sentCount = deviceResults.filter((d) => d.status === "Sent").length;
+  const failureCount = deviceResults.length - sentCount;
+
+  if (sentCount > 0) {
+    // Partial success is success. FCM has no idempotency key, so a retry after
+    // 3-of-4 delivered would re-notify three healthy devices; only a send that
+    // reached nobody may be retried. This is the invariant the whole fan-out
+    // design rests on.
+    return ok({
+      type: InternalEventType.MessageSent,
+      variant: {
+        type: ChannelType.MobilePush,
+        provider: { type: MobilePushProviderType.Firebase },
+        to,
+        devices: deviceResults,
+        sentCount,
+        failureCount,
+        ...contents,
+      } satisfies MessageMobilePushSuccess,
+    });
+  }
+
+  const codes = deviceResults.map((d) => d.errorCode);
+
+  if (codes.some(isTransientCode)) {
+    const transient = deviceResults.find((d) => isTransientCode(d.errorCode));
+    throw new Error(
+      `mobile push send failed for all ${deviceResults.length} device(s), last transient error: ${transient?.errorCode ?? "unknown"} ${transient?.errorMessage ?? ""}`.trim(),
+    );
+  }
+
+  if (codes.some(isConfigCode)) {
+    const configFailure = deviceResults.find((d) => isConfigCode(d.errorCode));
+    const configCode = configFailure?.errorCode ?? "fcm configuration error";
+    const configMessage = configFailure?.errorMessage ?? "";
+    return err({
+      type: InternalEventType.BadWorkspaceConfiguration,
+      variant: {
+        type: BadWorkspaceConfigurationType.MessageServiceProviderMisconfigured,
+        message: `${configCode}: ${configMessage}`.trim(),
+      },
+    });
+  }
+
+  if (deviceResults.every((d) => d.status === "Unregistered")) {
+    return err({
+      type: InternalEventType.MessageSkipped,
+      variant: {
+        type: MessageSkippedType.NoReachableDevices,
+        identifierKey,
+        devices: deviceResults,
+      },
+    });
+  }
+
+  const firstFailure = deviceResults.find((d) => d.status !== "Sent");
+  return err({
+    type: InternalEventType.MessageFailure,
+    variant: {
+      type: ChannelType.MobilePush,
+      provider: { type: MobilePushProviderType.Firebase },
+      devices: deviceResults,
+      code: firstFailure?.errorCode,
+      message: firstFailure?.errorMessage,
+    } satisfies MessageMobilePushServiceFailure,
+  });
+}
+
+export async function sendWhatsApp(
+  params: Omit<SendMessageParametersWhatsApp, "channel">,
+): Promise<BackendMessageSendResult> {
+  const {
+    workspaceId,
+    templateId,
+    userPropertyAssignments,
+    subscriptionGroupDetails,
+    useDraft,
+    messageTags,
+    isPreview,
+    providerOverride,
+  } = params;
+
+  const [getSendModelsResult, secret] = await Promise.all([
+    getSendMessageModels({
+      workspaceId,
+      templateId,
+      channel: ChannelType.WhatsApp,
+      useDraft,
+      subscriptionGroupDetails,
+    }),
+    db().query.secret.findFirst({
+      where: and(
+        eq(dbSecret.workspaceId, workspaceId),
+        eq(dbSecret.name, SecretNames.Interakt),
+      ),
+    }),
+  ]);
+  if (getSendModelsResult.isErr()) {
+    return err(getSendModelsResult.error);
+  }
+  const { messageTemplateDefinition } = getSendModelsResult.value;
+
+  if (messageTemplateDefinition.type !== ChannelType.WhatsApp) {
+    return err({
+      type: InternalEventType.BadWorkspaceConfiguration,
+      variant: {
+        type: BadWorkspaceConfigurationType.MessageTemplateMisconfigured,
+        message: "message template is not a whatsapp template",
+      },
+    });
+  }
+
+  // The Test provider renders and resolves the recipient but never calls the
+  // provider, so a template preview cannot message a real customer.
+  const isTestProvider = providerOverride === WhatsAppProviderType.Test;
+
+  let interaktSecret: InteraktSecret | null = null;
+  if (!isTestProvider) {
+    if (!secret?.configValue) {
+      return err({
+        type: InternalEventType.BadWorkspaceConfiguration,
+        variant: {
+          type: BadWorkspaceConfigurationType.MessageServiceProviderNotFound,
+        },
+      });
+    }
+    const parsedSecret = schemaValidateWithErr(
+      secret.configValue,
+      InteraktSecret,
+    );
+    if (parsedSecret.isErr()) {
+      return err({
+        type: InternalEventType.BadWorkspaceConfiguration,
+        variant: {
+          type: BadWorkspaceConfigurationType.MessageServiceProviderMisconfigured,
+          message: parsedSecret.error.message,
+        },
+      });
+    }
+    interaktSecret = parsedSecret.value;
+  }
+
+  const identifierKey =
+    messageTemplateDefinition.identifierKey ??
+    CHANNEL_IDENTIFIERS[ChannelType.WhatsApp];
+
+  const renderedValuesResult = renderValues({
+    userProperties: userPropertyAssignments,
+    identifierKey,
+    subscriptionGroupId: subscriptionGroupDetails?.id,
+    workspaceId,
+    tags: messageTags,
+    isPreview,
+    templates: collectWhatsAppTemplates(messageTemplateDefinition),
+  });
+  if (renderedValuesResult.isErr()) {
+    const { error, field } = renderedValuesResult.error;
+    return err({
+      type: InternalEventType.BadWorkspaceConfiguration,
+      variant: {
+        type: BadWorkspaceConfigurationType.MessageTemplateRenderError,
+        field,
+        error,
+      },
+    });
+  }
+  const contents = inflateWhatsAppTemplates(
+    renderedValuesResult.value,
+    messageTemplateDefinition,
+  );
+
+  const identifier = userPropertyAssignments[identifierKey];
+  if (typeof identifier !== "string" || identifier.length === 0) {
+    return err({
+      type: InternalEventType.MessageSkipped,
+      variant: {
+        type: MessageSkippedType.MissingIdentifier,
+        identifierKey,
+      },
+    });
+  }
+
+  const messageId = messageTags?.messageId ?? randomUUID();
+  const payloadResult = toInteraktPayload({
+    contents,
+    identifier,
+    messageId,
+  });
+  if (payloadResult.isErr()) {
+    return err({
+      type: InternalEventType.BadWorkspaceConfiguration,
+      variant: {
+        type: BadWorkspaceConfigurationType.MessageTemplateMisconfigured,
+        message: payloadResult.error.message,
+      },
+    });
+  }
+
+  if (isTestProvider) {
+    return ok({
+      type: InternalEventType.MessageSent,
+      variant: {
+        type: ChannelType.WhatsApp,
+        provider: { type: WhatsAppProviderType.Test },
+        to: identifier,
+        ...contents,
+      } satisfies MessageWhatsAppSuccess,
+    });
+  }
+
+  if (!interaktSecret) {
+    return err({
+      type: InternalEventType.BadWorkspaceConfiguration,
+      variant: {
+        type: BadWorkspaceConfigurationType.MessageServiceProviderNotFound,
+      },
+    });
+  }
+
+  const account = resolveInteraktAccount(contents);
+  const keyResult = selectInteraktKey({ secret: interaktSecret, account });
+  if (keyResult.isErr()) {
+    return err({
+      type: InternalEventType.BadWorkspaceConfiguration,
+      variant: {
+        type: BadWorkspaceConfigurationType.MessageServiceProviderMisconfigured,
+        message: keyResult.error.message,
+      },
+    });
+  }
+
+  const sendResult = await sendInteraktTemplate({
+    key: keyResult.value,
+    payload: payloadResult.value,
+  });
+
+  if (sendResult.isErr()) {
+    // No response at all -- a transport error. Thrown, not returned: per this
+    // module's contract a thrown error is retryable, and nothing was sent.
+    throw sendResult.error;
+  }
+
+  const { status, body } = sendResult.value;
+
+  // Interakt signals failure inside a 200 body as well as by status, so both
+  // have to agree before this counts as sent. Recording a rejected message as
+  // sent would inflate the campaign report and hide a broken template.
+  if (status >= 200 && status < 300 && isInteraktSuccessBody(body)) {
+    return ok({
+      type: InternalEventType.MessageSent,
+      variant: {
+        type: ChannelType.WhatsApp,
+        provider: { type: WhatsAppProviderType.Interakt },
+        to: identifier,
+        providerMessageId: extractInteraktMessageId(body),
+        providerResponse: body,
+        ...contents,
+      } satisfies MessageWhatsAppSuccess,
+    });
+  }
+
+  const providerMessage = extractInteraktErrorMessage(body);
+
+  if (isTransientStatus(status)) {
+    throw new Error(
+      `whatsapp send failed with a retryable status ${status}: ${
+        providerMessage ?? "no message"
+      }`,
+    );
+  }
+
+  if (isAuthStatus(status)) {
+    return err({
+      type: InternalEventType.BadWorkspaceConfiguration,
+      variant: {
+        type: BadWorkspaceConfigurationType.MessageServiceProviderMisconfigured,
+        message:
+          `Interakt rejected the ${account} key (HTTP ${status})` +
+          `${providerMessage ? `: ${providerMessage}` : ""}. Check the key ` +
+          `in Settings.`,
+      },
+    });
+  }
+
+  return err({
+    type: InternalEventType.MessageFailure,
+    variant: {
+      type: ChannelType.WhatsApp,
+      provider: { type: WhatsAppProviderType.Interakt },
+      status,
+      message: providerMessage,
+      providerResponse: body,
+    } satisfies MessageWhatsAppServiceFailure,
+  });
+}
+
 export type Sender = (
   params: SendMessageParameters,
 ) => Promise<BackendMessageSendResult>;
@@ -2412,9 +2966,11 @@ export async function sendMessage(
       case ChannelType.Sms:
         return sendSms(params);
       case ChannelType.MobilePush:
-        throw new Error("not implemented");
+        return sendMobilePush(params);
       case ChannelType.Webhook:
         return sendWebhook(params);
+      case ChannelType.WhatsApp:
+        return sendWhatsApp(params);
     }
   });
 }
@@ -2495,7 +3051,7 @@ export async function testTemplate(
     case ChannelType.MobilePush: {
       sendMessageParams = {
         ...baseSendMessageParams,
-        provider: request.provider,
+        providerOverride: request.provider,
         channel: request.channel,
       };
       break;
@@ -2503,6 +3059,14 @@ export async function testTemplate(
     case ChannelType.Webhook: {
       sendMessageParams = {
         ...baseSendMessageParams,
+        channel: request.channel,
+      };
+      break;
+    }
+    case ChannelType.WhatsApp: {
+      sendMessageParams = {
+        ...baseSendMessageParams,
+        providerOverride: request.provider,
         channel: request.channel,
       };
       break;
@@ -2726,6 +3290,9 @@ export async function batchMessageUsers(
             case MessageSkippedType.SubscriptionState:
               errorMessage =
                 "User does not satisfy subscription group requirements";
+              break;
+            case MessageSkippedType.NoReachableDevices:
+              errorMessage = `All of the user's registered devices have unregistered from push notifications: ${error.variant.identifierKey}`;
               break;
             default:
               assertUnreachable(error.variant);

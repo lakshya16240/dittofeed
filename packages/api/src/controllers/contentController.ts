@@ -18,6 +18,7 @@ import { FastifyInstance } from "fastify";
 import { CHANNEL_IDENTIFIERS } from "isomorphic-lib/src/channels";
 import { SecretNames } from "isomorphic-lib/src/constants";
 import { defaultEmailDefinition } from "isomorphic-lib/src/email";
+import { defaultMobilePushDefinition } from "isomorphic-lib/src/mobilePush";
 import { unwrap } from "isomorphic-lib/src/resultHandling/resultUtils";
 import { schemaValidateWithErr } from "isomorphic-lib/src/resultHandling/schemaValidation";
 import { defaultSmsDefinition } from "isomorphic-lib/src/sms";
@@ -56,6 +57,7 @@ import {
   WebhookSecret,
 } from "isomorphic-lib/src/types";
 import { DEFAULT_WEBHOOK_DEFINITION } from "isomorphic-lib/src/webhook";
+import { defaultWhatsAppDefinition } from "isomorphic-lib/src/whatsApp";
 import * as R from "remeda";
 
 // eslint-disable-next-line @typescript-eslint/require-await
@@ -269,7 +271,12 @@ export default async function contentController(fastify: FastifyInstance) {
           break;
         }
         case ChannelType.MobilePush: {
-          throw new Error("Mobile push templates unimplemented");
+          definition = defaultMobilePushDefinition();
+          break;
+        }
+        case ChannelType.WhatsApp: {
+          definition = defaultWhatsAppDefinition();
+          break;
         }
       }
       const result = await upsertMessageTemplate({
@@ -350,8 +357,80 @@ export default async function contentController(fastify: FastifyInstance) {
           },
         });
       }
+      if (
+        result.error.type === InternalEventType.MessageSkipped &&
+        result.error.variant.type === MessageSkippedType.NoReachableDevices
+      ) {
+        const { identifierKey, devices } = result.error.variant;
+        return reply.status(200).send({
+          type: JsonResultType.Err,
+          err: {
+            suggestions: [
+              `Every device registered in "${identifierKey}" has unregistered from push notifications. The app was likely uninstalled, or the tokens were issued by a different Firebase project.`,
+            ],
+            responseData: devices
+              ? JSON.stringify(devices, null, 2)
+              : undefined,
+          },
+        });
+      }
       if (result.error.type === InternalEventType.MessageFailure) {
         switch (result.error.variant.type) {
+          case ChannelType.MobilePush: {
+            const { devices, code, message } = result.error.variant;
+            const suggestions: string[] = [];
+            if (message) {
+              suggestions.push(message);
+            } else {
+              suggestions.push(
+                "Failed to send the push notification. Check your FCM configuration and the device token.",
+              );
+            }
+            if (code) {
+              suggestions.push(`FCM error code: ${code}`);
+            }
+            // Per-device detail matters for a fan-out send, where some devices
+            // may have succeeded while others were rejected.
+            return reply.status(200).send({
+              type: JsonResultType.Err,
+              err: {
+                suggestions,
+                responseData: devices
+                  ? JSON.stringify(devices, null, 2)
+                  : undefined,
+              },
+            });
+          }
+          case ChannelType.WhatsApp: {
+            const { status, code, message, providerResponse } =
+              result.error.variant;
+            const suggestions: string[] = [];
+            if (message) {
+              suggestions.push(message);
+            } else {
+              suggestions.push(
+                "Failed to send the WhatsApp message. Check the template name, its parameters, and your Interakt configuration.",
+              );
+            }
+            if (status) {
+              suggestions.push(`Provider responded with status: ${status}`);
+            }
+            if (code) {
+              suggestions.push(`Provider error code: ${code}`);
+            }
+            // The provider's own body is the only place that says which
+            // parameter or template it rejected, so surface it verbatim
+            // rather than collapsing it into a generic message.
+            return reply.status(200).send({
+              type: JsonResultType.Err,
+              err: {
+                suggestions,
+                responseData: providerResponse
+                  ? JSON.stringify(providerResponse, null, 2)
+                  : undefined,
+              },
+            });
+          }
           case ChannelType.Webhook: {
             const { response, code } = result.error.variant;
             const suggestions = [
@@ -549,6 +628,37 @@ export default async function contentController(fastify: FastifyInstance) {
                 `Unable to send message, because you haven't configured a message service provider.`,
               ],
             },
+          });
+        }
+
+        // These two carry a message written for the template author -- which
+        // field is wrong and why. Without a case here they fall through to the
+        // generic fallback and the author is told only that something failed.
+        if (
+          result.error.variant.type ===
+          BadWorkspaceConfigurationType.MessageTemplateMisconfigured
+        ) {
+          return reply.status(200).send({
+            type: JsonResultType.Err,
+            err: {
+              suggestions: [result.error.variant.message],
+            },
+          });
+        }
+
+        if (
+          result.error.variant.type ===
+          BadWorkspaceConfigurationType.MessageTemplateRenderError
+        ) {
+          const { field, error } = result.error.variant;
+          const suggestions: string[] = [];
+          if (field) {
+            suggestions.push(`Failed to render the "${field}" field.`);
+          }
+          suggestions.push(error);
+          return reply.status(200).send({
+            type: JsonResultType.Err,
+            err: { suggestions },
           });
         }
       }

@@ -456,6 +456,35 @@ export function DeliveriesTable({
           if (variant.type === ChannelType.Webhook) {
             const { request, response } = variant;
             body = JSON.stringify({ request, response }, null, 2);
+          } else if (variant.type === ChannelType.MobilePush) {
+            // Push contents are all optional, and the per-device outcome is
+            // the part worth showing for a fan-out send.
+            body = JSON.stringify(
+              {
+                title: variant.title,
+                body: variant.body,
+                sentCount: variant.sentCount,
+                failureCount: variant.failureCount,
+                devices: variant.devices,
+              },
+              null,
+              2,
+            );
+          } else if (variant.type === ChannelType.WhatsApp) {
+            // An approved provider template carries no free-form body; what
+            // was actually sent is the template name plus its parameters.
+            body = JSON.stringify(
+              {
+                templateName: variant.templateName,
+                languageCode: variant.languageCode,
+                headerValues: variant.headerValues,
+                bodyValues: variant.bodyValues,
+                buttonValues: variant.buttonValues,
+                providerMessageId: variant.providerMessageId,
+              },
+              null,
+              2,
+            );
           } else {
             body = variant.body;
           }

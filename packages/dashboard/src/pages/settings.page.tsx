@@ -6,9 +6,11 @@ import {
   InfoOutlined,
   Key,
   Mail,
+  NotificationsActive,
   SimCardDownload,
   SmsOutlined,
   Webhook,
+  WhatsApp as WhatsAppIcon,
 } from "@mui/icons-material";
 import { LoadingButton } from "@mui/lab";
 import {
@@ -59,11 +61,13 @@ import {
   EphemeralRequestStatus,
   IntegrationResource,
   IntegrationType,
+  MobilePushProviderType,
   PartialSegmentResource,
   SmsProviderType,
   SmtpSecretKey,
   SyncIntegration,
   UpsertIntegrationResource,
+  WhatsAppProviderType,
 } from "isomorphic-lib/src/types";
 import {
   GetServerSideProps,
@@ -249,6 +253,8 @@ export const getServerSideProps: GetServerSideProps<PropsWithInitialState> =
         workspaceId,
         names: [
           SecretNames.Webhook,
+          SecretNames.Fcm,
+          SecretNames.Interakt,
           ...Object.values(EMAIL_PROVIDER_TYPE_TO_SECRET_NAME),
           ...Object.values(SMS_PROVIDER_TYPE_TO_SECRET_NAME),
         ],
@@ -302,6 +308,8 @@ const settingsSectionIds = {
   segmentSource: "segment-source",
   emailChannel: "email-channel",
   smsChannel: "sms-channel",
+  mobilePushChannel: "mobile-push-channel",
+  whatsAppChannel: "whatsapp-channel",
   webhookChannel: "webhook-channel",
   subscription: "subscriptions",
   authentication: "authentication",
@@ -351,6 +359,24 @@ function getMenuItems(authMode: string | undefined): MenuItemGroup[] {
           icon: SmsOutlined,
           description:
             "Configure email settings, including the email provider credentials.",
+        },
+        {
+          id: "mobile-push",
+          title: "Push Notification",
+          type: "item",
+          url: `/settings#${settingsSectionIds.mobilePushChannel}`,
+          icon: NotificationsActive,
+          description:
+            "Configure mobile push notifications via Firebase Cloud Messaging.",
+        },
+        {
+          id: "whatsapp",
+          title: "WhatsApp",
+          type: "item",
+          url: `/settings#${settingsSectionIds.whatsAppChannel}`,
+          icon: WhatsAppIcon,
+          description:
+            "Configure WhatsApp template messaging via your provider account.",
         },
         {
           id: "webhook",
@@ -1613,12 +1639,133 @@ function WebhookChannelConfig() {
   );
 }
 
+const FCM_HELPER =
+  "Paste the full Firebase service account JSON: Firebase console \u2192 " +
+  "Project settings \u2192 Service accounts \u2192 Generate new private key. " +
+  "For iOS, also upload an APNs auth key under Cloud Messaging.";
+
+function MobilePushChannelConfig() {
+  const secretAvailability = useSecretAvailability();
+
+  return (
+    <>
+      <SectionSubHeader
+        id={settingsSectionIds.mobilePushChannel}
+        title="Push Notification"
+      />
+      <Fields
+        sections={[
+          {
+            id: "fcm-section",
+            fieldGroups: [
+              {
+                id: "fcm-fields",
+                name: "Firebase Cloud Messaging",
+                fields: [
+                  {
+                    id: "fcm-service-account",
+                    type: "secret",
+                    fieldProps: {
+                      name: SecretNames.Fcm,
+                      secretKey: "key",
+                      label: "FCM Service Account JSON",
+                      helperText: FCM_HELPER,
+                      type: MobilePushProviderType.Firebase,
+                      multiline: true,
+                      rows: 8,
+                      saved: isSecretSaved(
+                        SecretNames.Fcm,
+                        "key",
+                        secretAvailability,
+                      ),
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ]}
+      />
+    </>
+  );
+}
+
+const INTERAKT_CAMPAIGN_HELPER =
+  "The pre-encoded Basic key for your marketing account. Interakt console " +
+  "\u2192 Developer Settings \u2192 Secret Key. Templates default to this account.";
+
+const INTERAKT_SUPPORT_HELPER =
+  "The Basic key for your transactional account, used by templates set to " +
+  "the Support account. Leave blank if you only use one account.";
+
+function WhatsAppChannelConfig() {
+  const secretAvailability = useSecretAvailability();
+
+  return (
+    <>
+      <SectionSubHeader
+        id={settingsSectionIds.whatsAppChannel}
+        title="WhatsApp"
+      />
+      <Fields
+        sections={[
+          {
+            id: "interakt-section",
+            fieldGroups: [
+              {
+                id: "interakt-fields",
+                name: "Interakt",
+                fields: [
+                  {
+                    id: "interakt-campaign-key",
+                    type: "secret",
+                    fieldProps: {
+                      name: SecretNames.Interakt,
+                      secretKey: "campaignKey",
+                      label: "Campaign API Key",
+                      helperText: INTERAKT_CAMPAIGN_HELPER,
+                      type: WhatsAppProviderType.Interakt,
+                      saved: isSecretSaved(
+                        SecretNames.Interakt,
+                        "campaignKey",
+                        secretAvailability,
+                      ),
+                    },
+                  },
+                  {
+                    id: "interakt-support-key",
+                    type: "secret",
+                    fieldProps: {
+                      name: SecretNames.Interakt,
+                      secretKey: "supportKey",
+                      label: "Support API Key",
+                      helperText: INTERAKT_SUPPORT_HELPER,
+                      type: WhatsAppProviderType.Interakt,
+                      saved: isSecretSaved(
+                        SecretNames.Interakt,
+                        "supportKey",
+                        secretAvailability,
+                      ),
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ]}
+      />
+    </>
+  );
+}
+
 function MessageChannelsConfig() {
   return (
     <Stack spacing={3}>
       <SectionHeader title="Message Channels" />
       <EmailChannelConfig />
       <SmsChannelConfig />
+      <MobilePushChannelConfig />
+      <WhatsAppChannelConfig />
       <WebhookChannelConfig />
     </Stack>
   );

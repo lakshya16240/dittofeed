@@ -2,24 +2,36 @@ import { Autocomplete, TextField } from "@mui/material";
 import { emailProviderLabel } from "isomorphic-lib/src/email";
 import {
   ChannelType,
+  MobilePushProviderType,
   SmsProviderType,
+  WhatsAppProviderType,
   WorkspaceWideEmailProviders,
   WorkspaceWideEmailProviderType,
 } from "isomorphic-lib/src/types";
 
-function getProviderLabel(
-  provider: WorkspaceWideEmailProviders | SmsProviderType,
-) {
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
-  if (Object.values(SmsProviderType).includes(provider as SmsProviderType)) {
-    return provider;
+type ChannelProvider =
+  | WorkspaceWideEmailProviders
+  | SmsProviderType
+  | MobilePushProviderType
+  | WhatsAppProviderType;
+
+// Switches on channel rather than sniffing the value: MobilePushProviderType
+// and SmsProviderType both contain "Test", so a value-based check would
+// misattribute it.
+function getProviderLabel(channel: ChannelType, provider: ChannelProvider) {
+  switch (channel) {
+    case ChannelType.Sms:
+    case ChannelType.MobilePush:
+    case ChannelType.WhatsApp:
+      return provider;
+    default:
+      // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+      return emailProviderLabel(provider as WorkspaceWideEmailProviders);
   }
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
-  return emailProviderLabel(provider as WorkspaceWideEmailProviders);
 }
 
 export type ProviderOverrideChangeHandler = (
-  provider: WorkspaceWideEmailProviders | SmsProviderType | null,
+  provider: ChannelProvider | null,
 ) => void;
 
 export default function ChannelProviderAutocomplete({
@@ -28,12 +40,12 @@ export default function ChannelProviderAutocomplete({
   disabled,
   handler,
 }: {
-  providerOverride?: WorkspaceWideEmailProviders | SmsProviderType | null;
+  providerOverride?: ChannelProvider | null;
   disabled?: boolean;
   channel: ChannelType;
   handler: ProviderOverrideChangeHandler;
 }) {
-  let providerOptions: (WorkspaceWideEmailProviders | SmsProviderType)[] = [];
+  let providerOptions: ChannelProvider[] = [];
   switch (channel) {
     case ChannelType.Email:
       providerOptions = Object.values(WorkspaceWideEmailProviderType);
@@ -42,8 +54,15 @@ export default function ChannelProviderAutocomplete({
       providerOptions = Object.values(SmsProviderType);
       break;
     case ChannelType.MobilePush:
-      // TODO: Implement mobile push providers when available
-      return null;
+      // Firebase is the only real provider; Test renders and resolves devices
+      // without calling FCM.
+      providerOptions = Object.values(MobilePushProviderType);
+      break;
+    case ChannelType.WhatsApp:
+      // Interakt is the only real provider; Test renders and resolves the
+      // recipient without calling it.
+      providerOptions = Object.values(WhatsAppProviderType);
+      break;
     case ChannelType.Webhook:
       // Webhooks don't have provider overrides
       return null;
@@ -56,10 +75,10 @@ export default function ChannelProviderAutocomplete({
       value={provider}
       options={providerOptions}
       disabled={disabled}
-      getOptionLabel={getProviderLabel}
+      getOptionLabel={(p) => getProviderLabel(channel, p)}
       onChange={(_event, p) =>
         // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
-        handler(p as WorkspaceWideEmailProviders | SmsProviderType | null)
+        handler(p as ChannelProvider | null)
       }
       renderInput={(params) => (
         <TextField {...params} label="Provider Override" variant="outlined" />

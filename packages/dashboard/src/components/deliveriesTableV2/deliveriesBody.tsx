@@ -46,6 +46,7 @@ import { isInternalBroadcastTemplate } from "isomorphic-lib/src/broadcasts";
 import { unwrap } from "isomorphic-lib/src/resultHandling/resultUtils";
 import { schemaValidateWithErr } from "isomorphic-lib/src/resultHandling/schemaValidation";
 import { assertUnreachable } from "isomorphic-lib/src/typeAssertions";
+import { jsonParseSafe } from "isomorphic-lib/src/resultHandling/schemaValidation";
 import {
   BroadcastResourceAllVersions,
   BroadcastResourceVersionEnum,
@@ -80,6 +81,8 @@ import { humanizeStatus } from "../deliveriesTable";
 import EmailPreviewHeader from "../emailPreviewHeader";
 import { GreyButton } from "../greyButtonStyle";
 import EmailPreviewBody from "../messages/emailPreview";
+import MobilePushPreviewBody from "../messages/mobilePushPreview";
+import WhatsAppPreviewBody from "../messages/whatsAppPreview";
 import { WebhookPreviewBody } from "../messages/webhookPreview";
 import SmsPreviewBody from "../smsPreviewBody";
 import TemplatePreview from "../templatePreview";
@@ -110,6 +113,8 @@ function humanizeChannel(channel: ChannelType): string {
       return "Webhook";
     case ChannelType.MobilePush:
       return "Mobile Push";
+    case ChannelType.WhatsApp:
+      return "WhatsApp";
   }
 }
 
@@ -347,7 +352,33 @@ interface WebhookDelivery extends BaseDelivery {
   snippet?: undefined;
 }
 
-type Delivery = EmailDelivery | SmsDelivery | WebhookDelivery;
+interface MobilePushDelivery extends BaseDelivery {
+  channel: typeof ChannelType.MobilePush;
+  from?: undefined;
+  // The primary device token. A fan-out send reaches several devices; the
+  // per-device breakdown lives in the delivery body.
+  to: string;
+  subject?: undefined;
+  replyTo?: undefined;
+  snippet?: string;
+}
+
+interface WhatsAppDelivery extends BaseDelivery {
+  channel: typeof ChannelType.WhatsApp;
+  from?: undefined;
+  // The recipient in E.164 form.
+  to: string;
+  subject?: undefined;
+  replyTo?: undefined;
+  snippet?: string;
+}
+
+type Delivery =
+  | EmailDelivery
+  | SmsDelivery
+  | WebhookDelivery
+  | MobilePushDelivery
+  | WhatsAppDelivery;
 
 const DeliveriesCountResponseSchema = Type.Object({
   count: Type.Number(),
@@ -811,6 +842,58 @@ export function useDeliveryBodyState({
             ),
           };
           break;
+        case ChannelType.MobilePush:
+          delivery = {
+            ...baseDelivery,
+            channel: ChannelType.MobilePush,
+            // FCM reports no delivery receipts, so the useful detail is the
+            // rendered notification plus the per-device outcome.
+            body: JSON.stringify(
+              {
+                title: variant.title,
+                body: variant.body,
+                imageUrl: variant.imageUrl,
+                data: variant.data,
+                android: variant.android,
+                apns: variant.apns,
+                sentCount: variant.sentCount,
+                failureCount: variant.failureCount,
+                devices: variant.devices,
+              },
+              null,
+              2,
+            ),
+            snippet: variant.title ?? variant.body,
+            to: variant.to,
+          };
+          break;
+        case ChannelType.WhatsApp:
+          delivery = {
+            ...baseDelivery,
+            channel: ChannelType.WhatsApp,
+            // The provider template is approved on their side, so the useful
+            // detail is which template was sent with which parameters, plus
+            // the provider's own acknowledgement.
+            body: JSON.stringify(
+              {
+                templateName: variant.templateName,
+                languageCode: variant.languageCode,
+                account: variant.account,
+                headerValues: variant.headerValues,
+                bodyValues: variant.bodyValues,
+                buttonValues: variant.buttonValues,
+                providerMessageId: variant.providerMessageId,
+                providerResponse: variant.providerResponse,
+              },
+              null,
+              2,
+            ),
+            snippet: variant.bodyValues?.length
+              ? `${variant.templateName} (${variant.bodyValues.join(", ")})`
+              : variant.templateName,
+            to: variant.to,
+          };
+          break;
         default:
           assertUnreachable(variant);
       }
@@ -1062,6 +1145,55 @@ export function DeliveriesBody({
         previewHeader = null;
         previewBody = <WebhookPreviewBody body={previewObject.body} />;
         break;
+      case ChannelType.MobilePush: {
+        previewHeader = null;
+        // `body` holds the JSON we assembled from the delivery variant above.
+        const parsed = jsonParseSafe(previewObject.body).unwrapOr(
+          {},
+        ) as Record<string, unknown>;
+        previewBody = (
+          <MobilePushPreviewBody
+            title={
+              typeof parsed.title === "string" ? parsed.title : undefined
+            }
+            body={typeof parsed.body === "string" ? parsed.body : undefined}
+            imageUrl={
+              typeof parsed.imageUrl === "string" ? parsed.imageUrl : undefined
+            }
+          />
+        );
+        break;
+      }
+      case ChannelType.WhatsApp: {
+        previewHeader = null;
+        // `body` holds the JSON assembled from the delivery variant above.
+        const parsed = jsonParseSafe(previewObject.body).unwrapOr(
+          {},
+          // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+        ) as Record<string, unknown>;
+        const strings = (value: unknown): string[] =>
+          Array.isArray(value)
+            ? value.filter((v): v is string => typeof v === "string")
+            : [];
+        previewBody = (
+          <WhatsAppPreviewBody
+            templateName={
+              typeof parsed.templateName === "string" ? parsed.templateName : ""
+            }
+            languageCode={
+              typeof parsed.languageCode === "string" ? parsed.languageCode : ""
+            }
+            headerValues={strings(parsed.headerValues)}
+            bodyValues={strings(parsed.bodyValues)}
+            buttonValues={
+              typeof parsed.buttonValues === "string"
+                ? parsed.buttonValues
+                : ""
+            }
+          />
+        );
+        break;
+      }
       default:
         assertUnreachable(previewObject);
     }

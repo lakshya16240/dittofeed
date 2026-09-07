@@ -88,7 +88,6 @@ export const initializeStore = (preloadedState: PreloadedState = {}) =>
         writeKeys: [],
         secrets: [],
         enableSourceControl: preloadedState.enableSourceControl ?? false,
-        enableMobilePush: preloadedState.enableMobilePush ?? false,
         integrations: [],
 
         messageTemplateDeleteRequest: {

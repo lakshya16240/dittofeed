@@ -61,6 +61,7 @@ import {
   SmsProviderType,
   UserPropertyAssignments,
   UserPropertyResource,
+  WhatsAppProviderType,
   WorkspaceMemberResource,
 } from "isomorphic-lib/src/types";
 import { LoremIpsum } from "lorem-ipsum";
@@ -216,11 +217,17 @@ export interface WebhookTemplateState extends BaseTemplateState {
   providerOverride: null;
 }
 
+export interface WhatsAppTemplateState extends BaseTemplateState {
+  channel: (typeof ChannelType)["WhatsApp"];
+  providerOverride: WhatsAppProviderType | null;
+}
+
 export type TemplateEditorState =
   | EmailTemplateState
   | SmsTemplateState
   | MobilePushTemplateState
-  | WebhookTemplateState;
+  | WebhookTemplateState
+  | WhatsAppTemplateState;
 
 const LOREM = new LoremIpsum({
   sentencesPerParagraph: {
@@ -935,6 +942,13 @@ export default function TemplateEditor({
         channel: state.channel,
       };
       break;
+    case ChannelType.WhatsApp:
+      submitTestDataVariables = {
+        ...submitTestDataBase,
+        channel: state.channel,
+        provider: state.providerOverride ?? undefined,
+      };
+      break;
     default:
       assertUnreachable(state);
   }
@@ -1043,7 +1057,18 @@ export default function TemplateEditor({
       ) {
         identifierKey = draftToRender.identifierKey;
       }
-      to = debouncedUserProperties[identifierKey] ?? null;
+      // UserPropertyAssignments is Record<string, any>, so this is not
+      // necessarily a string. A multi-device push token property resolves to an
+      // array of registration events, and rendering that directly throws
+      // "Objects are not valid as a React child".
+      const rawTo: unknown = debouncedUserProperties[identifierKey];
+      if (typeof rawTo === "string") {
+        to = rawTo;
+      } else if (rawTo === null || rawTo === undefined) {
+        to = null;
+      } else {
+        to = JSON.stringify(rawTo);
+      }
     }
     let providerAutocomplete: React.ReactNode;
     switch (state.channel) {
@@ -1118,6 +1143,28 @@ export default function TemplateEditor({
       case ChannelType.Webhook:
         providerAutocomplete = null;
         break;
+      case ChannelType.WhatsApp: {
+        const providerOptions: {
+          id: WhatsAppProviderType;
+          label: string;
+        }[] = Object.values(WhatsAppProviderType).map((type) => ({
+          id: type,
+          label: type,
+        }));
+        providerAutocomplete = (
+          <ProviderOverrideSelector<WhatsAppProviderType>
+            value={state.providerOverride}
+            options={providerOptions}
+            onChange={(value) => {
+              setState((draft) => {
+                if (draft.channel === ChannelType.WhatsApp)
+                  draft.providerOverride = value;
+              });
+            }}
+          />
+        );
+        break;
+      }
       default:
         assertUnreachable(state);
     }

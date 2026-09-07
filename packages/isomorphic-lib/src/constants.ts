@@ -28,6 +28,7 @@ export enum SecretNames {
   Postmark = "postmark",
   MailChimp = "mailchimp",
   Fcm = "fcm-key",
+  Interakt = "interakt-key",
   Smtp = "smtp",
   Subscription = "subscription-key",
   Webhook = "webhook-channel",
@@ -65,6 +66,7 @@ export const CHANNEL_NAMES: Record<ChannelType, string> = {
   [ChannelType.Email]: "Email",
   [ChannelType.MobilePush]: "Push Notification",
   [ChannelType.Webhook]: "Webhook",
+  [ChannelType.WhatsApp]: "WhatsApp",
 };
 
 export const DAY_INDICES = [0, 1, 2, 3, 4, 5, 6] as const;

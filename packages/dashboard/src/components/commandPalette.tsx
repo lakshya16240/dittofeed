@@ -1,28 +1,13 @@
 import { Search as SearchIcon } from "@mui/icons-material";
 import { Dialog, useTheme } from "@mui/material";
 import { Command } from "cmdk";
+import { messageTemplatePath } from "isomorphic-lib/src/messageTemplates";
 import { ChannelType, CompletionStatus } from "isomorphic-lib/src/types";
 import { useRouter } from "next/router";
 import React, { useCallback, useEffect } from "react";
 
 import { useAppStorePick } from "../lib/appStore";
 import { useResourcesQuery } from "../lib/useResourcesQuery";
-
-// Map channel type to route path
-function getTemplateChannelPath(channel?: ChannelType): string {
-  switch (channel) {
-    case ChannelType.Email:
-      return "email";
-    case ChannelType.Sms:
-      return "sms";
-    case ChannelType.MobilePush:
-      return "mobilepush";
-    case ChannelType.Webhook:
-      return "webhook";
-    default:
-      return "email"; // fallback
-  }
-}
 
 // Command Palette Component
 export default function CommandPalette() {
@@ -145,7 +130,10 @@ export default function CommandPalette() {
                   value={`template ${template.name}`}
                   onSelect={() =>
                     handleSelect(
-                      `/templates/${getTemplateChannelPath(template.channel)}/${template.id}`,
+                      messageTemplatePath({
+              id: template.id,
+              channel: template.channel ?? ChannelType.Email,
+            }),
                     )
                   }
                 >

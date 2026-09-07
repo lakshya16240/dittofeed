@@ -90,7 +90,6 @@ const BaseRawConfigProps = {
   dashboardApiSubdomain: Type.Optional(Type.String()),
   dashboardApiProtocol: Type.Optional(Type.String()),
   dashboardApiPort: Type.Optional(Type.String()),
-  enableMobilePush: Type.Optional(BoolStr),
   hubspotClientId: Type.Optional(Type.String()),
   hubspotClientSecret: Type.Optional(Type.String()),
   readQueryPageSize: Type.Optional(Type.String({ format: "naturalNumber" })),
@@ -300,7 +299,6 @@ export type Config = Overwrite<
     dittofeedTelemetryDisabled: boolean;
     enableAdditionalDashboardSettings: boolean;
     enableBlobStorage: boolean;
-    enableMobilePush: boolean;
     enableSourceControl: boolean;
     exportLogsHyperDx: boolean;
     enableColdStorage: boolean;
@@ -669,7 +667,6 @@ function parseRawConfig(rawConfig: RawConfig): Config {
     dashboardUrl,
     apiBase,
     trackDashboard: rawConfig.trackDashboard === "true",
-    enableMobilePush: rawConfig.enableMobilePush === "true",
     readQueryPageSize: rawConfig.readQueryPageSize
       ? parseInt(rawConfig.readQueryPageSize)
       : 1000,
