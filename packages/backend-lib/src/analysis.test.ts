@@ -1553,12 +1553,14 @@ describe("analysis", () => {
   describe("getSummarizedData with WhatsApp channel", () => {
     let journeyId: string;
     let templateId: string;
+    let nodeId: string;
 
     // One message per terminal status, so the cascade can be checked
     // independently of how many statuses a single message accumulated.
     beforeEach(async () => {
       journeyId = randomUUID();
       templateId = randomUUID();
+      nodeId = randomUUID();
 
       const messageSentEvent: Omit<MessageSendSuccess, "type"> = {
         variant: {
@@ -1588,7 +1590,7 @@ describe("analysis", () => {
         properties: {
           workspaceId,
           journeyId,
-          nodeId: randomUUID(),
+          nodeId,
           runId: randomUUID(),
           templateId,
           messageId,
@@ -1596,6 +1598,11 @@ describe("analysis", () => {
         },
       });
 
+      // Deliberately carries only what the Interakt forwarder can know.
+      // Interakt echoes back a single `callbackData` string, so a status has
+      // the origin messageId and nothing else -- no journeyId, no nodeId,
+      // unlike email and SMS providers which round-trip every
+      // MESSAGE_METADATA_FIELD as tags.
       const status = (
         originMessageId: string,
         event: InternalEventType,
@@ -1608,12 +1615,8 @@ describe("analysis", () => {
         event,
         properties: {
           workspaceId,
-          journeyId,
-          nodeId: randomUUID(),
-          runId: randomUUID(),
-          templateId,
-          // Links the status back to the send it belongs to.
           messageId: originMessageId,
+          channel: ChannelType.WhatsApp,
         },
       });
 
@@ -1652,6 +1655,36 @@ describe("analysis", () => {
       expect(result.summary.opens).toBe(2);
       expect(result.summary.clicks).toBe(1);
       expect(result.summary.bounces).toBe(1);
+    });
+
+    it("needs nodeId on the status event for journey-editor stats", async () => {
+      // Documents a real limitation of the Interakt pipeline rather than an
+      // aspiration. Interakt echoes back a single `callbackData` string, so a
+      // forwarded status carries only the origin messageId -- unlike email and
+      // SMS providers, which round-trip every MESSAGE_METADATA_FIELD as tags.
+      //
+      // getSummarizedData joins statuses to sends on origin_message_id and so
+      // is unaffected (asserted above). getJourneyEditorStats instead reads
+      // journeyId and nodeId off the status event's own properties, so those
+      // statuses are invisible to it. Campaign-level reporting works; per-node
+      // WhatsApp delivery rates in the journey editor do not, until the
+      // metadata round-trips.
+      const editor = await getJourneyEditorStats({
+        workspaceId,
+        journeyId,
+        startDate: new Date(Date.now() - 7200000).toISOString(),
+        endDate: new Date().toISOString(),
+      });
+
+      const stats = editor.nodeStats[nodeId];
+      if (!stats) throw new Error("node stats should be defined");
+
+      // The sends are visible because they carry journeyId and nodeId.
+      expect(stats.sent).toBe(4);
+      // The statuses are not, because they carry neither.
+      expect(stats.delivered).toBe(0);
+      expect(stats.opened).toBe(0);
+      expect(stats.clicked).toBe(0);
     });
 
     it("does not attribute WhatsApp statuses to another channel", async () => {
