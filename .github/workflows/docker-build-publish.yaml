@@ -1,17 +1,45 @@
+# Builds the fork's own images and publishes them to GHCR.
+#
+# Upstream publishes to Docker Hub under `dittofeed/*`, which this fork cannot
+# push to. GHCR is used instead because it authenticates with the built-in
+# GITHUB_TOKEN, so a fork needs no configured secrets to deploy.
+#
+# Only the `lite` image is built. That image already contains the api,
+# dashboard, worker and admin-cli bundles, so it serves all three production
+# roles (web, worker, migrations) from one tag. Building the other four images
+# would quintuple CI time and, more importantly, invite a version skew where
+# the admin-cli running migrations is not the code the app is running.
 name: Publish Docker image
 
 on:
+  # Tag-driven releases are the normal path: `git tag v0.24.0-saya.1 && git push --tags`.
+  push:
+    tags: ["v*"]
+  # Manual builds for testing a branch before tagging it.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or SHA to build"
+        required: false
+        default: ""
   release:
     types: [published]
 
 jobs:
   push_to_registry:
-    name: Push Docker image to Docker Hub
+    name: Push Docker image to GHCR
     strategy:
       matrix:
-        package: [worker, api, dashboard, admin-cli, lite]
+        package: [lite]
 
     runs-on: ubuntu-latest
+
+    # `packages: write` is what lets GITHUB_TOKEN push to ghcr.io. Without it
+    # the push fails with a 403 that reads like a credential problem.
+    permissions:
+      contents: read
+      packages: write
+
     steps:
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
@@ -25,39 +53,51 @@ jobs:
           large-packages: true
           docker-images: false
           swap-storage: true
-      - name: Check out the repo
-        uses: actions/checkout@v3
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
+      - name: Check out the repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@f054a8b539a109f9f41c372932f1ae047eff08c9
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
+        uses: docker/metadata-action@v5
         with:
-          images: dittofeed/dittofeed-${{ matrix.package }}
+          images: ghcr.io/${{ github.repository_owner }}/dittofeed-${{ matrix.package }}
+          # A long SHA tag is always emitted so production can pin an immutable
+          # digest-equivalent tag rather than a moving one.
+          tags: |
+            type=ref,event=tag
+            type=sha,format=long
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
 
       - name: Get current git revision
         id: git_revision
         run: echo "REVISION=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@ad44023a93711e3deb337508980b4b5e9bcdc5dc
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./packages/${{ matrix.package }}/Dockerfile
           push: true
-          platforms: linux/amd64,linux/arm64
+          # amd64 only. arm64 would be emulated through QEMU, and the Next.js
+          # dashboard build under emulation takes roughly an hour. Add
+          # linux/arm64 back here only if the deployment target is arm.
+          platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           build-args: |
             APP_VERSION=${{ steps.git_revision.outputs.REVISION }}

@@ -1,0 +1,209 @@
+# Production stack for this fork: lite web tier + a separate worker, both from
+# the same image, with Postgres and ClickHouse containerized on the host.
+#
+# Differences from docker-compose.lite.yaml that matter in production:
+#   - Postgres and ClickHouse publish NO host ports. They are reachable only on
+#     the internal compose network. The lite file publishes 5432/8123/9000 to
+#     0.0.0.0, which on a public VM exposes the database to the internet.
+#   - The web tier binds to 127.0.0.1 only; TLS is terminated by a reverse
+#     proxy in front of it.
+#   - The worker runs as its own service with ENABLE_WORKER=false on the web
+#     tier, so a journey backlog cannot starve the dashboard of heap and the web
+#     tier can be restarted without pausing sends.
+#   - BOOTSTRAP is not set. Migrations run as an explicit one-shot step (see
+#     the `admin` service and DEPLOYMENT.md) so a deploy cannot half-migrate on
+#     boot, and so two replicas cannot race the same migration.
+#   - No MinIO. Blob storage is off by default and is not needed.
+#
+# Usage: docker compose -f docker-compose.prod.yaml --env-file .env.prod <cmd>
+
+x-clickhouse-credentials: &clickhouse-credentials
+  CLICKHOUSE_USER: "${CLICKHOUSE_USER:?set CLICKHOUSE_USER}"
+  CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}"
+
+x-database-credentials: &database-credentials
+  DATABASE_USER: "${DATABASE_USER:?set DATABASE_USER}"
+  DATABASE_PASSWORD: "${DATABASE_PASSWORD:?set DATABASE_PASSWORD}"
+
+# Shared by the web tier, the worker and the admin one-shot. All three are the
+# same application code and must agree on how to reach every dependency.
+x-backend-app-env: &backend-app-env
+  <<: [*clickhouse-credentials, *database-credentials]
+  NODE_ENV: production
+  DATABASE_HOST: postgres
+  DATABASE_PORT: "5432"
+  CLICKHOUSE_HOST: http://clickhouse-server:8123
+  TEMPORAL_ADDRESS: temporal:7233
+  WORKSPACE_NAME: "${WORKSPACE_NAME:?set WORKSPACE_NAME}"
+  AUTH_MODE: single-tenant
+
+  # Encrypts the session cookie in single-tenant mode. The published default is
+  # public, so leaving it unset is a dashboard auth bypass.
+  SECRET_KEY: "${SECRET_KEY:?set SECRET_KEY - generate one with openssl rand -base64 32}"
+  # The single-tenant login password, compared as a plain string.
+  PASSWORD: "${PASSWORD:?set PASSWORD}"
+
+  # Must be the real public origin. Unset, this defaults to
+  # https://app.dittofeed.com in production, which silently becomes the
+  # allowed CORS origin and, in single-tenant mode, the dashboard's API base.
+  DASHBOARD_URL: "${DASHBOARD_URL:?set DASHBOARD_URL to the public origin}"
+  # Empty means "same origin, use relative URLs", which is correct for lite
+  # where the API and the dashboard are served by one process on one port.
+  DASHBOARD_API_BASE: ""
+
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+
+x-logging: &logging
+  driver: "local"
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  # Web tier: Fastify API with the Next.js dashboard mounted on the same port.
+  lite:
+    image: "${IMAGE_REPOSITORY:?set IMAGE_REPOSITORY}:${IMAGE_TAG:?set IMAGE_TAG}"
+    restart: unless-stopped
+    logging: *logging
+    command:
+      - node
+      - --max-old-space-size=${LITE_HEAP_MB:-1536}
+      - ./packages/lite/dist/scripts/startLite.js
+      - --workspace-name=${WORKSPACE_NAME}
+    mem_limit: ${LITE_MEM_LIMIT:-2048m}
+    environment:
+      <<: *backend-app-env
+      # The worker runs as its own service below.
+      ENABLE_WORKER: "false"
+      # Set only behind TLS. With this true over plain HTTP the browser will
+      # refuse to store the session cookie and login will appear to succeed
+      # while never actually logging in.
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+    ports:
+      # Loopback only. The reverse proxy terminates TLS and forwards here.
+      - "127.0.0.1:${LITE_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse-server:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+    networks: [dittofeed]
+
+  # Journeys, computed properties and the global cron.
+  #
+  # No *_TASK_QUEUE variables are set anywhere in this file, so everything
+  # defaults to the "default" queue and this one worker serves all of it. Do
+  # not copy the helm chart's COMPUTED_PROPERTIES_TASK_QUEUE=workspace /
+  # GLOBAL_CRON_TASK_QUEUE=global values here: the chart also runs a worker
+  # per queue. Setting them without those extra workers schedules computed
+  # properties onto a queue nothing polls, and segments then silently stop
+  # updating with no error anywhere.
+  worker:
+    image: "${IMAGE_REPOSITORY:?set IMAGE_REPOSITORY}:${IMAGE_TAG:?set IMAGE_TAG}"
+    restart: unless-stopped
+    logging: *logging
+    command:
+      - node
+      - --max-old-space-size=${WORKER_HEAP_MB:-1536}
+      - ./packages/worker/dist/scripts/startWorker.js
+    mem_limit: ${WORKER_MEM_LIMIT:-2048m}
+    environment:
+      <<: *backend-app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse-server:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+    networks: [dittofeed]
+
+  # One-shot for migrations, bootstrap and upgrade steps. Started only via
+  # `docker compose run --rm admin <args>`; the profile keeps `up` from
+  # launching it. Uses the same image as the app, so the admin-cli that runs
+  # migrations is always the exact code being deployed.
+  admin:
+    image: "${IMAGE_REPOSITORY:?set IMAGE_REPOSITORY}:${IMAGE_TAG:?set IMAGE_TAG}"
+    profiles: ["admin"]
+    entrypoint: ["node", "./packages/admin-cli/dist/scripts/cli.js"]
+    logging: *logging
+    environment:
+      <<: *backend-app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [dittofeed]
+
+  temporal:
+    image: temporalio/auto-setup:${TEMPORAL_VERSION:-1.22.4}
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: ${TEMPORAL_MEM_LIMIT:-1024m}
+    environment:
+      - DB=postgresql
+      - DB_PORT=5432
+      - POSTGRES_USER=${DATABASE_USER}
+      - POSTGRES_PWD=${DATABASE_PASSWORD}
+      - POSTGRES_SEEDS=postgres
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/prod.yaml
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./packages/backend-lib/temporal-dynamicconfig:/etc/temporal/config/dynamicconfig:ro
+    networks: [dittofeed]
+
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-15}
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      - POSTGRES_USER=${DATABASE_USER}
+      - POSTGRES_PASSWORD=${DATABASE_PASSWORD}
+      - POSTGRES_DB=dittofeed
+    # Deliberately no `ports`. Reach it with:
+    #   docker compose -f docker-compose.prod.yaml exec postgres psql -U <user> dittofeed
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d dittofeed"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    networks: [dittofeed]
+
+  clickhouse-server:
+    image: clickhouse/clickhouse-server:24.12.6.70-alpine
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: ${CLICKHOUSE_MEM_LIMIT:-4096m}
+    environment:
+      <<: *clickhouse-credentials
+    # Deliberately no `ports`.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8123/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse_lib:/var/lib/clickhouse
+      - clickhouse_log:/var/log/clickhouse-server
+    networks: [dittofeed]
+
+volumes:
+  postgres:
+  clickhouse_lib:
+  clickhouse_log:
+
+networks:
+  dittofeed:
+    driver: bridge
+    name: dittofeed-prod

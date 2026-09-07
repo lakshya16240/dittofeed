@@ -71,6 +71,10 @@ typings/
 # dotenv environment variables file
 .env
 .env.test
+# Production secrets. Never commit; .env.prod.example is the tracked template.
+.env.prod
+.env.prod.*
+!.env.prod.example
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
