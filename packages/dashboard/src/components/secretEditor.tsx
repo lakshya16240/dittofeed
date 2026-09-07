@@ -126,13 +126,20 @@ function SecretTextField({
   multiline?: boolean;
   rows?: number;
 }) {
+  // MUI ignores type="password" on a multiline field, and the masking
+  // adornment would imply a masking that is not happening. The value is
+  // visible while being entered and masked to ********** once saved.
+  let fieldType: string | undefined;
+  if (multiline) {
+    fieldType = undefined;
+  } else {
+    fieldType = showValue ? "text" : "password";
+  }
+
   return (
     <SimpleTextField
       autoFocus={autoFocus}
-      // MUI ignores type="password" on a multiline field, and the masking
-      // adornment would imply a masking that is not happening. The value is
-      // visible while being entered and masked to ********** once saved.
-      type={multiline ? undefined : showValue ? "text" : "password"}
+      type={fieldType}
       multiline={multiline}
       rows={multiline ? rows : undefined}
       sx={{ flex: 1 }}

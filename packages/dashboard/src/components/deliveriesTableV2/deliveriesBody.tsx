@@ -44,9 +44,11 @@ import axios from "axios";
 import formatDistanceToNow from "date-fns/formatDistanceToNow";
 import { isInternalBroadcastTemplate } from "isomorphic-lib/src/broadcasts";
 import { unwrap } from "isomorphic-lib/src/resultHandling/resultUtils";
-import { schemaValidateWithErr } from "isomorphic-lib/src/resultHandling/schemaValidation";
+import {
+  jsonParseSafe,
+  schemaValidateWithErr,
+} from "isomorphic-lib/src/resultHandling/schemaValidation";
 import { assertUnreachable } from "isomorphic-lib/src/typeAssertions";
-import { jsonParseSafe } from "isomorphic-lib/src/resultHandling/schemaValidation";
 import {
   BroadcastResourceAllVersions,
   BroadcastResourceVersionEnum,
@@ -82,8 +84,8 @@ import EmailPreviewHeader from "../emailPreviewHeader";
 import { GreyButton } from "../greyButtonStyle";
 import EmailPreviewBody from "../messages/emailPreview";
 import MobilePushPreviewBody from "../messages/mobilePushPreview";
-import WhatsAppPreviewBody from "../messages/whatsAppPreview";
 import { WebhookPreviewBody } from "../messages/webhookPreview";
+import WhatsAppPreviewBody from "../messages/whatsAppPreview";
 import SmsPreviewBody from "../smsPreviewBody";
 import TemplatePreview from "../templatePreview";
 import { DEFAULT_ALLOWED_COLUMNS } from "./constants";
@@ -1148,14 +1150,12 @@ export function DeliveriesBody({
       case ChannelType.MobilePush: {
         previewHeader = null;
         // `body` holds the JSON we assembled from the delivery variant above.
-        const parsed = jsonParseSafe(previewObject.body).unwrapOr(
-          {},
-        ) as Record<string, unknown>;
+        const raw = jsonParseSafe(previewObject.body).unwrapOr({});
+        // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+        const parsed = raw as Record<string, unknown>;
         previewBody = (
           <MobilePushPreviewBody
-            title={
-              typeof parsed.title === "string" ? parsed.title : undefined
-            }
+            title={typeof parsed.title === "string" ? parsed.title : undefined}
             body={typeof parsed.body === "string" ? parsed.body : undefined}
             imageUrl={
               typeof parsed.imageUrl === "string" ? parsed.imageUrl : undefined
@@ -1167,10 +1167,9 @@ export function DeliveriesBody({
       case ChannelType.WhatsApp: {
         previewHeader = null;
         // `body` holds the JSON assembled from the delivery variant above.
-        const parsed = jsonParseSafe(previewObject.body).unwrapOr(
-          {},
-          // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
-        ) as Record<string, unknown>;
+        const raw = jsonParseSafe(previewObject.body).unwrapOr({});
+        // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+        const parsed = raw as Record<string, unknown>;
         const strings = (value: unknown): string[] =>
           Array.isArray(value)
             ? value.filter((v): v is string => typeof v === "string")
@@ -1186,9 +1185,7 @@ export function DeliveriesBody({
             headerValues={strings(parsed.headerValues)}
             bodyValues={strings(parsed.bodyValues)}
             buttonValues={
-              typeof parsed.buttonValues === "string"
-                ? parsed.buttonValues
-                : ""
+              typeof parsed.buttonValues === "string" ? parsed.buttonValues : ""
             }
           />
         );

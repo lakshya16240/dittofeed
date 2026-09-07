@@ -42,8 +42,8 @@ import {
   SignalWireSenderOverrideType,
   SmsProviderType,
   TwilioSenderOverrideType,
-  WorkspaceWideEmailProviders,
   WhatsAppProviderType,
+  WorkspaceWideEmailProviders,
 } from "isomorphic-lib/src/types";
 import { ReactNode, useCallback, useMemo } from "react";
 

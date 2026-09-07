@@ -242,9 +242,8 @@ export default function SubscriptionGroupConfig() {
               <MenuItem value={ChannelType.Email}>Email</MenuItem>
               <MenuItem value={ChannelType.Sms}>SMS</MenuItem>
               <MenuItem value={ChannelType.Webhook}>Webhook</MenuItem>
-              <MenuItem value={ChannelType.MobilePush}>
-                Mobile Push
-              </MenuItem>
+              <MenuItem value={ChannelType.MobilePush}>Mobile Push</MenuItem>
+              <MenuItem value={ChannelType.WhatsApp}>WhatsApp</MenuItem>
             </Select>
           </FormControl>
         </InfoTooltip>

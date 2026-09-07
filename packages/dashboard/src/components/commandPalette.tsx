@@ -131,9 +131,9 @@ export default function CommandPalette() {
                   onSelect={() =>
                     handleSelect(
                       messageTemplatePath({
-              id: template.id,
-              channel: template.channel ?? ChannelType.Email,
-            }),
+                        id: template.id,
+                        channel: template.channel ?? ChannelType.Email,
+                      }),
                     )
                   }
                 >
