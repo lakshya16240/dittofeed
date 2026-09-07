@@ -1657,6 +1657,38 @@ describe("analysis", () => {
       expect(result.summary.bounces).toBe(1);
     });
 
+    it("includes WhatsApp statuses in the chart", async () => {
+      // getChartData derives its own has_* flags, separate from
+      // getSummarizedData. It was the third copy of the same event list and is
+      // easy to miss, which leaves the summary correct while the chart plots a
+      // flat zero for deliveries.
+      const result = await getChartData({
+        workspaceId,
+        startDate: new Date(Date.now() - 7200000).toISOString(),
+        endDate: new Date().toISOString(),
+        granularity: "1day",
+        filters: { channels: [ChannelType.WhatsApp] },
+        groupBy: "messageState",
+      });
+
+      const totals = mapValues(
+        groupBy(result.data, (point) => point.groupKey),
+        (points) => points.reduce((acc, point) => acc + point.count, 0),
+      );
+
+      // Note the chart does NOT cascade, unlike getSummarizedData: it counts
+      // the raw has_* flag per state, so a message whose only status was a
+      // read counts as opened but not as delivered. That is pre-existing
+      // behaviour and applies identically to email, which is why chart and
+      // summary delivery counts can legitimately disagree. Asserted so the
+      // discrepancy reads as known rather than as a WhatsApp bug.
+      expect(totals.sent).toBe(4);
+      expect(totals.delivered).toBe(1);
+      expect(totals.opened).toBe(1);
+      expect(totals.clicked).toBe(1);
+      expect(totals.bounced).toBe(1);
+    });
+
     it("needs nodeId on the status event for journey-editor stats", async () => {
       // Documents a real limitation of the Interakt pipeline rather than an
       // aspiration. Interakt echoes back a single `callbackData` string, so a

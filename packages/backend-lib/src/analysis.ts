@@ -278,23 +278,16 @@ export async function getChartData({
       FROM internal_events AS ie
       WHERE
         ie.workspace_id = ${workspaceIdParam}
-        AND ie.event IN (
-          '${InternalEventType.EmailDelivered}',
-          '${InternalEventType.SmsDelivered}',
-          '${InternalEventType.EmailOpened}',
-          '${InternalEventType.EmailClicked}',
-          '${InternalEventType.EmailBounced}',
-          '${InternalEventType.SmsFailed}'
-        )
+        AND ie.event IN (${eventSet(TRACKED_STATUS_EVENTS)})
         AND ie.origin_message_id IN (SELECT origin_message_id FROM sent_messages)
     ),
     message_flags AS (
       SELECT
         origin_message_id,
-        max(event IN ('${InternalEventType.EmailDelivered}', '${InternalEventType.SmsDelivered}')) AS has_delivered,
-        max(event = '${InternalEventType.EmailOpened}') AS has_opened,
-        max(event = '${InternalEventType.EmailClicked}') AS has_clicked,
-        max(event IN ('${InternalEventType.EmailBounced}', '${InternalEventType.SmsFailed}')) AS has_bounced
+        max(event IN (${eventSet(DeliveredEventsList)})) AS has_delivered,
+        max(event IN (${eventSet(OpenedEventsList)})) AS has_opened,
+        max(event IN (${eventSet(ClickedEventsList)})) AS has_clicked,
+        max(event IN (${eventSet(BouncedEventsList)})) AS has_bounced
       FROM status_events
       WHERE origin_message_id != ''
       GROUP BY origin_message_id
